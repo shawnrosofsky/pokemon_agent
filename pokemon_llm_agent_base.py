@@ -5,7 +5,8 @@ import numpy as np
 from io import BytesIO
 from abc import ABC, abstractmethod
 from PIL import Image
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 import json
 
 class PokemonGameInterface:
@@ -91,7 +92,7 @@ class PokemonGameInterface:
             speed (int): Emulation speed (1 = normal)
         """
         self.rom_path = rom_path
-        window_type = "headless" if headless else "SDL2"
+        window_type = "null" if headless else "SDL2"
         self.pyboy = PyBoy(rom_path, window_type=window_type)
         self.pyboy.set_emulation_speed(speed)
         

@@ -321,7 +321,7 @@ if __name__ == "__main__":
     parser.add_argument('--agent', choices=['anthropic', 'langchain', 'langgraph'], default='anthropic', 
                       help='Type of agent to use')
     parser.add_argument('--api-key', help='API key (will use ANTHROPIC_API_KEY env var if not provided)')
-    parser.add_argument('--model', default='claude-3-opus-20240229', help='Model to use')
+    parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
     parser.add_argument('--steps', type=int, default=100, help='Number of steps to run')
     parser.add_argument('--exp-dir', default='experiments', help='Base directory for experiments')

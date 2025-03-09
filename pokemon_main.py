@@ -23,8 +23,8 @@ def main():
     agent_group.add_argument('--agent', choices=['anthropic', 'langchain', 'langgraph'], default='anthropic',
                            help='Which type of agent to use (default: anthropic)')
     agent_group.add_argument('--api-key', help='API key (if not provided, uses ANTHROPIC_API_KEY env var)')
-    agent_group.add_argument('--model', default='claude-3-sonnet-20240229',
-                           help='Model name to use (default: claude-3-sonnet-20240229)')
+    agent_group.add_argument('--model', default='claude-3-7-sonnet-20250219',
+                           help='Model name to use (default: claude-3-7-sonnet-20250219)')
     agent_group.add_argument('--temperature', type=float, default=0.2,
                            help='Temperature setting for the model (default: 0.2)')
     

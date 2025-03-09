@@ -48,7 +48,7 @@ class PokemonController:
     def __init__(self, rom_path):
         """Initialize the Pokémon controller with the ROM path."""
         self.rom_path = rom_path
-        self.pyboy = PyBoy(rom_path, window_type="headless")  # Use headless for script control
+        self.pyboy = PyBoy(rom_path, window="null")  # Use null window for script control
         self.pyboy.set_emulation_speed(1)
         self.screen_buffer = None
         print("PyBoy initialized successfully")
@@ -58,7 +58,7 @@ class PokemonController:
         print("Starting game...")
         # Advance a few frames to let the game initialize
         for _ in range(60):  # Wait for ~1 second at 60 FPS
-            self.pyboy.tick()
+            self.pyboy.tick(1, True)
         
         # Press start to begin the game
         self.press_button('start')
@@ -76,24 +76,25 @@ class PokemonController:
             return
             
         # Press the button
-        self.pyboy.send_input(self.BUTTONS[button])
+        # self.pyboy.send_input(self.BUTTONS[button])
+        self.pyboy.button_press(button)
         
         # Hold for specified frames
         for _ in range(hold_frames):
-            self.pyboy.tick()
+            self.pyboy.tick(1, True)
             
         # Release the button
-        self.pyboy.send_input(self.RELEASE_BUTTONS[button])
-        self.pyboy.tick()
+        # self.pyboy.send_input(self.RELEASE_BUTTONS[button])
+        self.pyboy.button_release(button)
+        self.pyboy.tick(1, True)
         
     def get_screen(self):
         """Get the current screen as a numpy array."""
-        screen = self.pyboy.botsupport_manager().screen()
-        return screen.screen_ndarray()
+        return np.array(self.pyboy.screen.screen_ndarray())
     
     def get_memory_value(self, address):
         """Get the value at a specific memory address."""
-        return self.pyboy.get_memory_value(address)
+        return self.pyboy.memory[address]
     
     def get_player_position(self):
         """Get the player's position on the map."""
@@ -133,7 +134,7 @@ class PokemonController:
             self.press_button(button)
             # Small delay between button presses
             for _ in range(5):
-                self.pyboy.tick()
+                self.pyboy.tick(1, True)
     
     def save_state(self, filename="save_state.state"):
         """Save the current game state."""
@@ -191,7 +192,7 @@ def run_interactive_demo(rom_path):
     # Animation update function
     def update(_):
         # Update game state
-        controller.pyboy.tick()
+        controller.pyboy.tick(1, True)
         
         # Update the screen
         screen = controller.get_screen()

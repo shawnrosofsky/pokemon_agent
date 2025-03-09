@@ -4,7 +4,6 @@ Basic example of using PyBoy 2.x.x to play Pokemon Red
 """
 import time
 import numpy as np
-# from pyboy import PyBoy, WindowEvent
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 
@@ -15,7 +14,7 @@ ROM_PATH = "roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Coloriz
 def main():
     # Start PyBoy and load the ROM
     # pyboy = PyBoy(ROM_PATH, game_wrapper=True)
-    pyboy = PyBoy(ROM_PATH)
+    pyboy = PyBoy(ROM_PATH, window_type="null")
     pyboy.set_emulation_speed(1)  # Set to 1 for normal speed
     
     # In PyBoy 2.x.x, booting animation happens automatically
@@ -28,24 +27,19 @@ def main():
         frame_count = 0
         
         while running:
-            # Tick advances the game by one frame
-            running = pyboy.tick()
+            # Tick advances the game by one frame and returns True while game is running
+            running = pyboy.tick(1, True)
             
             # Get the current game screen as a numpy array
-            # game_screen = np.array(pyboy.screen.screen_ndarray())
             game_screen = np.array(pyboy.screen.ndarray)
             
             # Example: Press START button after 5 seconds (300 frames at 60fps)
-            # if frame_count == 60 * 5:
-            if frame_count == 60 * 10:
-                # print(WindowEvent.PRESS_BUTTON_START)
+            if frame_count % (30 * 10) == 0:
                 pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
-                # pyboy.button_press('start')
-                # pyboy.button('start')
-                pyboy.tick()
-                pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
-                # pyboy.button_release('start')
-                # print("Pressed START button")
+                pyboy.tick(1, True)
+                pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+                print("Pressed START button")
+                print(game_screen)
             
             # Add your agent code here to:
             # 1. Process the game screen
@@ -53,7 +47,6 @@ def main():
             # 3. Send inputs to the game
             
             frame_count += 1
-            # print("Frame count:", frame_count)
     except KeyboardInterrupt:
         print("Stopping emulation...")
     finally:

@@ -1,41 +1,6 @@
 import sys
 import argparse
-
-def main():
-    parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using Anthropic API')
-    parser.add_argument('rom_path', help='Path to the Pokémon ROM file')
-    parser.add_argument('--api-key', help='Anthropic API key (will use ANTHROPIC_API_KEY env var if not provided)')
-    parser.add_argument('--model', default='claude-3-opus-20240229', help='Anthropic model to use')
-    parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
-    parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
-    parser.add_argument('--interval', type=int, default=30, help='Observation interval in frames')
-
-    args = parser.parse_args()
-
-    # Create the game interface
-    game = PokemonGameInterface(args.rom_path, headless=args.headless, speed=1)
-    
-    try:
-        # Start the game
-        game.start_game(skip_intro=True)
-        
-        # Create and run the agent
-        agent = PokemonAnthropicAgent(
-            game_interface=game,
-            model=args.model,
-            api_key=args.api_key,
-            observation_interval=args.interval
-        )
-        
-        agent.run(num_steps=args.steps)
-        
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        game.close()
-
-if __name__ == "__main__":
-    main() os
+import os
 import time
 import json
 from typing import Optional, Dict, Any
@@ -49,7 +14,7 @@ class PokemonAnthropicAgent(PokemonLLMAgentBase):
     Pokémon agent implementation using Anthropic API.
     """
     
-    def __init__(self, game_interface, model="claude-3-opus-20240229", api_key=None, 
+    def __init__(self, game_interface, model="claude-3-7-sonnet-20250219", api_key=None, 
                  max_tokens=1000, observation_interval=30):
         """
         Initialize the Anthropic-based agent.
@@ -183,6 +148,42 @@ Do not explain your reasoning, just respond with the single action.
             
             # Clean up
             self.game.close()
+
+def main():
+    parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using Anthropic API')
+    parser.add_argument('rom_path', help='Path to the Pokémon ROM file')
+    parser.add_argument('--api-key', help='Anthropic API key (will use ANTHROPIC_API_KEY env var if not provided)')
+    parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Anthropic model to use')
+    parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
+    parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
+    parser.add_argument('--interval', type=int, default=30, help='Observation interval in frames')
+
+    args = parser.parse_args()
+
+    # Create the game interface
+    game = PokemonGameInterface(args.rom_path, headless=args.headless, speed=1)
+    
+    try:
+        # Start the game
+        game.start_game(skip_intro=True)
+        
+        # Create and run the agent
+        agent = PokemonAnthropicAgent(
+            game_interface=game,
+            model=args.model,
+            api_key=args.api_key,
+            observation_interval=args.interval
+        )
+        
+        agent.run(num_steps=args.steps)
+        
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        game.close()
+
+if __name__ == "__main__":
+    main() 
 
 
 # Example usage

@@ -48,7 +48,7 @@ class PokemonLangGraphAgent(PokemonLLMAgentBase):
     Pokémon agent implementation using LangGraph.
     """
     
-    def __init__(self, game_interface, model_name="claude-3-sonnet-20240229", 
+    def __init__(self, game_interface, model_name="claude-3-7-sonnet-20250219", 
                  api_key=None, temperature=0.2, observation_interval=30,
                  checkpoint_dir="langgraph_checkpoints"):
         """
@@ -340,7 +340,7 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using LangGraph')
         parser.add_argument('rom_path', help='Path to the Pokémon ROM file')
         parser.add_argument('--api-key', help='API key (will use ANTHROPIC_API_KEY env var if not provided)')
-        parser.add_argument('--model', default='claude-3-sonnet-20240229', help='Model to use')
+        parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
         parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
         parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
         parser.add_argument('--interval', type=int, default=30, help='Observation interval in frames')
