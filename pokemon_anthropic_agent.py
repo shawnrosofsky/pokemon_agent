@@ -185,7 +185,3 @@ def main():
 if __name__ == "__main__":
     main() 
 
-
-# Example usage
-if __name__ == "__main__":
-    import
