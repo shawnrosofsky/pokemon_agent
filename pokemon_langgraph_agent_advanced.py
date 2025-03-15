@@ -2,6 +2,7 @@ import os
 import time
 import json
 import base64
+import traceback
 from typing import Dict, List, Any, Optional, Tuple, TypedDict, Annotated
 import uuid
 from io import BytesIO
@@ -11,20 +12,37 @@ from IPython.display import display, Markdown, HTML
 # LangGraph imports
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-# import langgraph.checkpoint as checkpoint
 from langgraph.checkpoint.memory import MemorySaver
 
+# LangChain imports
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
-from langchain.tools import tool
-
-# from langchain_core.pydantic_v1 import BaseModel, Field
-from pydantic import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool, StructuredTool, Tool, BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_anthropic import ChatAnthropic
+
+# Pydantic imports
+from pydantic import BaseModel, Field
 
 # Import PyBoy for game interaction
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 
+def print_dict(dictionary, indent=0):
+    """
+    Prints a dictionary in a readable format with proper indentation.
+    
+    Args:
+        dictionary (dict): The dictionary to print
+        indent (int, optional): Initial indentation level. Defaults to 0.
+    """
+    for key, value in dictionary.items():
+        if isinstance(value, dict):
+            print("  " * indent + f"{key}:")
+            print_dict(value, indent + 1)
+        else:
+            print("  " * indent + f"{key}: {value}")
+            
 class KnowledgeBase:
     """
     Knowledge base for storing and retrieving game-related information.
@@ -163,7 +181,7 @@ class GameEmulator:
         'money': 0xD347,               # Money (3 bytes, BCD format)
     }
     
-    def __init__(self, rom_path, headless=False, speed=1, sound=True):
+    def __init__(self, rom_path, headless=False, speed=1, sound=False):
         """Initialize the game emulator with the ROM."""
         self.rom_path = rom_path
         window = "null" if headless else "SDL2"
@@ -188,7 +206,7 @@ class GameEmulator:
         if skip_intro:
             # Skip intro sequence
             for _ in range(3):
-                self.press_button('start', hold_frames=5)
+                print(self.press_button('start', hold_frames=5))
                 time.sleep(0.1)
         
         # Wait for game to settle
@@ -200,7 +218,7 @@ class GameEmulator:
         """Press a button for the specified number of frames."""
         if button not in self.BUTTONS:
             print(f"Warning: Unknown button '{button}'")
-            return "Error: Unknown button"
+            return f"Error: Unknown button '{button}'"
         
         # Press button
         self.pyboy.send_input(self.BUTTONS[button])
@@ -242,7 +260,6 @@ class GameEmulator:
     
     def get_screen(self):
         """Get current screen as numpy array."""
-        # return self.screen_manager.screen_ndarray()
         return self.screen_manager.ndarray
     
     def get_screen_as_pil(self):
@@ -369,7 +386,6 @@ class GameEmulator:
         with open(filename, "wb") as f:
             self.pyboy.save_state(f)
 
-        # self.pyboy.save_state(filename)
         return filename
     
     def load_state(self, filename):
@@ -388,6 +404,8 @@ class GameEmulator:
         for _ in range(num_frames):
             self.pyboy.tick()
             self.frame_count += 1
+        
+        return f"Waited for {num_frames} frames"
     
     def close(self):
         """Clean up resources."""
@@ -411,71 +429,111 @@ class PokemonAgentState(TypedDict):
     knowledge_summary: str
     # Additional context
     context: Dict[str, Any]
+    # Tool error tracking
+    tool_error: Optional[str]
 
 
 # Define tools for the LangGraph
-class GameActionTool(BaseModel):
-    """Tool for executing game actions."""
-    action: str = Field(description="The button to press: up, down, left, right, a, b, start, select")
-    hold_frames: int = Field(default=10, description="Number of frames to hold the button")
+@tool
+def press_button(button: str, hold_frames: int = 10, emulator=None) -> str:
+    """
+    Press a button on the Game Boy for a specified number of frames.
     
-    def execute(self, emulator):
-        """Execute the action in the emulator."""
-        return emulator.press_button(self.action, self.hold_frames)
-
-
-class NavigatorTool(BaseModel):
-    """Tool for navigating to specific locations."""
-    destination: str = Field(description="The destination to navigate to")
-    
-    def execute(self, emulator, knowledge_base):
-        """Plan and execute a navigation path."""
-        # Get current position
-        state = emulator.get_game_state()
-        current_pos = state['player']['position']
-        current_map = state['player']['map']
+    Args:
+        button: The button to press ('up', 'down', 'left', 'right', 'a', 'b', 'start', 'select')
+        hold_frames: Number of frames to hold the button (default: 10)
         
-        # Check if we have path information in knowledge base
-        paths = knowledge_base.get("map_data", "paths") or {}
-        key = f"{current_map}_{self.destination}"
-        
-        if key in paths:
-            # Execute saved path
-            path = paths[key]
-            result = f"Navigating from map {current_map} to {self.destination} using stored path.\n"
-            
-            for step in path[:5]:  # Execute first few steps
-                result += emulator.press_button(step) + "\n"
-            
-            return result
-        else:
-            # No path found, use simple navigation
-            return f"No stored path found. Using simple navigation towards {self.destination}."
-
-
-class UpdateKnowledgeBaseTool(BaseModel):
-    """Tool for updating the knowledge base."""
-    section: str = Field(description="Section to update (game_state, player_progress, strategies, map_data)")
-    key: str = Field(description="Key within the section")
-    value: Any = Field(description="Value to store")
+    Returns:
+        str: Result of pressing the button
+    """
+    if emulator is None:
+        return "Error: Emulator not available"
     
-    def execute(self, knowledge_base):
-        """Update the knowledge base."""
-        knowledge_base.update(self.section, self.key, self.value)
-        return f"Updated knowledge base: {self.section}.{self.key} = {self.value}"
+    return emulator.press_button(button, hold_frames)
+
+@tool
+def wait_frames(num_frames: int = 30, emulator=None) -> str:
+    """
+    Wait for a specified number of frames without taking any action.
+    This is a safe action when unsure what to do or when recovering from an error.
+    
+    Args:
+        num_frames: Number of frames to wait (default: 30)
+        
+    Returns:
+        str: Result of waiting
+    """
+    if emulator is None:
+        return "Error: Emulator not available"
+    
+    return emulator.wait_frames(num_frames)
+
+@tool
+def navigate_to(destination: str, emulator=None, knowledge_base=None) -> str:
+    """
+    Navigate to a specific location in the game.
+    
+    Args:
+        destination: The destination location to navigate to
+        
+    Returns:
+        str: Result of the navigation attempt
+    """
+    if emulator is None or knowledge_base is None:
+        return "Error: Emulator or knowledge base not available"
+    
+    # Get current position
+    state = emulator.get_game_state()
+    current_pos = state['player']['position']
+    current_map = state['player']['map']
+    
+    # Check if we have path information in knowledge base
+    paths = knowledge_base.get("map_data", "paths") or {}
+    key = f"{current_map}_{destination}"
+    
+    if key in paths:
+        # Execute saved path
+        path = paths[key]
+        result = f"Navigating from map {current_map} to {destination} using stored path.\n"
+        
+        for step in path[:5]:  # Execute first few steps
+            result += emulator.press_button(step) + "\n"
+        
+        return result
+    else:
+        # No path found, use simple navigation
+        return f"No stored path found for {destination}. Please use press_button for manual navigation."
+
+@tool
+def update_knowledge(section: str, key: str, value: str, knowledge_base=None) -> str:
+    """
+    Update the knowledge base with new information.
+    
+    Args:
+        section: Section to update (game_state, player_progress, strategies, map_data)
+        key: Key within the section
+        value: Value to store
+        
+    Returns:
+        str: Confirmation of the update
+    """
+    if knowledge_base is None:
+        return "Error: Knowledge base not available"
+    
+    knowledge_base.update(section, key, value)
+    return f"Updated knowledge base: {section}.{key} = {value}"
 
 
 class PokemonLangGraphAgent:
     """
-    Pokémon agent implementation using LangGraph.
-    Implements the core game playing loop with context management.
+    Pokémon agent implementation using LangGraph with improved error handling.
     """
     
     def __init__(self, rom_path, model_name="claude-3-7-sonnet-20250219", 
                  api_key=None, temperature=1.0,
                  max_tokens=10000,
                  thinking=False, thinking_budget=4000,
-                 headless=False, speed=1, sound=True,
+                 headless=False, speed=1, sound=False,
                  checkpoint_dir="checkpoints"):
         """Initialize the LangGraph agent."""
         # Set up API key
@@ -490,10 +548,20 @@ class PokemonLangGraphAgent:
         self.thinking = thinking
         self.thinking_budget = thinking_budget
         if thinking:
-            self.thinking_params =     { "type": "enabled", "budget_tokens": thinking_budget }
+            self.thinking_params = {"type": "enabled", "budget_tokens": thinking_budget}
         else:
-            self.thinking_params =     { "type": "disabled" } 
-        # Create the LLM
+            self.thinking_params = {"type": "disabled"} 
+        
+        # Initialize game emulator
+        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed, sound=sound)
+        
+        # Initialize knowledge base
+        self.knowledge_base = KnowledgeBase()
+        
+        # Set up and configure the tools with access to resources
+        self.tools = self._configure_tools()
+        
+        # Properly create the LLM
         self.llm = ChatAnthropic(
             model_name=self.model_name,
             anthropic_api_key=self.api_key,
@@ -502,11 +570,8 @@ class PokemonLangGraphAgent:
             thinking=self.thinking_params,
         )
         
-        # Initialize game emulator
-        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed, sound=sound)
-        
-        # Initialize knowledge base
-        self.knowledge_base = KnowledgeBase()
+        # Now bind the tools using the correct method
+        self.llm = self.llm.bind_tools(self.tools)
         
         # Set up checkpoint directory
         self.checkpoint_dir = checkpoint_dir
@@ -527,6 +592,54 @@ class PokemonLangGraphAgent:
         self.action_stats = {}
         self.start_time = None
     
+    def _configure_tools(self):
+        """Configure the tools with access to the emulator and knowledge base."""
+        # Create copies of the tool functions with bound resources
+        def press_button_bound(button: str, hold_frames: int = 10) -> str:
+            return press_button(button, hold_frames, emulator=self.emulator)
+        
+        def navigate_to_bound(destination: str) -> str:
+            return navigate_to(destination, emulator=self.emulator, knowledge_base=self.knowledge_base)
+        
+        def update_knowledge_bound(section: str, key: str, value: str) -> str:
+            return update_knowledge(section, key, value, knowledge_base=self.knowledge_base)
+        
+        def wait_frames_bound(num_frames: int = 30) -> str:
+            return wait_frames(num_frames, emulator=self.emulator)
+        
+        # Create Tools with the bound functions
+        press_button_tool = Tool(
+            name="press_button",
+            description="Press a button on the Game Boy for a specified number of frames",
+            func=press_button_bound
+        )
+        
+        navigate_tool = Tool(
+            name="navigate_to",
+            description="Navigate to a specific location in the game",
+            func=navigate_to_bound
+        )
+        
+        update_kb_tool = Tool(
+            name="update_knowledge",
+            description="Update the knowledge base with new information",
+            func=update_knowledge_bound
+        )
+        
+        wait_tool = Tool(
+            name="wait_frames",
+            description="Wait for a specified number of frames without taking any action (safe fallback)",
+            func=wait_frames_bound
+        )
+        
+        # Convert to OpenAI-compatible tools for Claude
+        return [
+            convert_to_openai_tool(press_button_tool),
+            convert_to_openai_tool(navigate_tool),
+            convert_to_openai_tool(update_kb_tool),
+            convert_to_openai_tool(wait_tool)
+        ]
+    
     def _build_graph(self):
         """Build the LangGraph for the agent."""
         # Define the state graph
@@ -536,15 +649,15 @@ class PokemonLangGraphAgent:
         graph_builder.add_node("observe_game", self._observe_game_state)
         graph_builder.add_node("analyze_situation", self._analyze_situation)
         graph_builder.add_node("decide_action", self._decide_action)
-        graph_builder.add_node("execute_action", self._execute_action)
+        graph_builder.add_node("handle_tool_calls", self._handle_tool_calls)
         graph_builder.add_node("update_knowledge", self._update_knowledge)
         graph_builder.add_node("check_summarization", self._check_summarization)
         
         # Define edges
         graph_builder.add_edge("observe_game", "analyze_situation")
         graph_builder.add_edge("analyze_situation", "decide_action")
-        graph_builder.add_edge("decide_action", "execute_action")
-        graph_builder.add_edge("execute_action", "update_knowledge")
+        graph_builder.add_edge("decide_action", "handle_tool_calls")
+        graph_builder.add_edge("handle_tool_calls", "update_knowledge")
         graph_builder.add_edge("update_knowledge", "check_summarization")
         
         # Conditional edge: either END or loop back to observe
@@ -590,6 +703,8 @@ class PokemonLangGraphAgent:
             state["messages"] = []
         if "context" not in state:
             state["context"] = {}
+        if "tool_error" not in state:
+            state["tool_error"] = None
         
         return state
     
@@ -627,121 +742,282 @@ Please analyze the current game state:
 Recent actions:
 {state['knowledge_summary']}
 
+{f"Note about previous action: {state['tool_error']}" if state["tool_error"] else ""}
+
 Based on the screen and game state information, what's happening right now?
 """
             }
         ])
         
         # Get response from LLM
-        messages = [system_message, human_message]
-        response = self.llm.invoke(messages)
-        
-        # Update state with analysis
-        state["messages"] = messages + [response]
-        state["context"]["analysis"] = response.content
+        try:
+            messages = [system_message, human_message]
+            response = self.llm.invoke(messages)
+            
+            # Update state with analysis
+            state["messages"] = messages + [response]
+            state["context"]["analysis"] = response.content
+            
+        except Exception as e:
+            print(f"Error in analysis: {e}")
+            # If there's an error, provide a simple fallback analysis
+            state["context"]["analysis"] = "Unable to analyze the current situation due to an error. Please take a basic action to continue."
         
         return state
     
     def _decide_action(self, state: PokemonAgentState) -> PokemonAgentState:
-        """Node: Decide on the next action to take."""
-        # Create system message
+        """Node: Decide on the next action to take using tool calling."""
+        # Create system message for decision making with tool usage
         system_message = SystemMessage(content="""
 You are an expert Pokémon player. Your job is to decide the best next action based on the current game state.
 
-Available actions:
-- press_up: Move up
-- press_down: Move down
-- press_left: Move left
-- press_right: Move right
-- press_a: Interact/Select/Confirm
-- press_b: Cancel/Back/Run
-- press_start: Open menu
-- press_select: Cycle options
+Use the available tools to control the game:
+1. press_button: Press a Game Boy button (up, down, left, right, a, b, start, select)
+2. navigate_to: Navigate to a specific game location (if path is known)
+3. update_knowledge: Update the knowledge base with new information
+4. wait_frames: Wait for a specified number of frames without taking any action (safe fallback)
 
-You can also specify how long to hold a button with press_<button>:<frames>.
-For example, press_a:20 will hold A for 20 frames.
+For simple actions, use press_button with the appropriate button. You can specify how long to hold 
+by setting the hold_frames parameter.
 
-Respond with EXACTLY ONE action from the list above. Do not include explanations.
+If you're unsure what to do, or if there was an error with the previous action, use wait_frames
+instead of pressing buttons randomly. Waiting is safer than pressing buttons when uncertain.
+
+Always choose the action that will make the most progress in the game given the current situation.
 """)
         
-        # Create human message with analysis
+        # Create human message with analysis and any previous error
         human_message = HumanMessage(content=f"""
-Based on the following analysis, what action should I take next?
+Based on the analysis, please take the most appropriate action.
 
 Analysis:
 {state["context"]["analysis"]}
 
-Choose ONE action from the available actions list.
+{f"IMPORTANT - Error with previous action: {state['tool_error']}" if state["tool_error"] else ""}
+
+Choose ONE tool to use for the next action. If there was an error or you're uncertain, consider using wait_frames instead of making potentially harmful button presses.
 """)
         
-        # Get response from LLM
-        messages = [system_message, human_message]
-        response = self.llm.invoke(messages)
+        # Get response from LLM with tool calls
+        try:
+            messages = [system_message, human_message]
+            response = self.llm.invoke(messages)
+            
+            # Update state with action decision
+            state["messages"].extend([system_message, human_message, response])
+            
+            # Store the tool call info (if any)
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                state["context"]["tool_calls"] = response.tool_calls
+            else:
+                # If no tool calls, default to waiting as a safe fallback
+                state["context"]["fallback_action"] = "wait"
+                state["tool_error"] = "No tool was called, using safe wait fallback."
         
-        # Extract action
-        action_text = response.content.strip()
-        
-        # Parse action and frames
-        if ":" in action_text:
-            action_parts = action_text.split(":")
-            action = action_parts[0].strip()
-            try:
-                frames = int(action_parts[1].strip())
-            except ValueError:
-                frames = 10
-        else:
-            action = action_text
-            frames = 10
-        
-        # Clean up action format
-        if action.startswith("press_"):
-            button = action[6:]
-        else:
-            button = action
-        
-        # Update state
-        state["next_action"] = button
-        state["context"]["hold_frames"] = frames
-        state["messages"].extend([system_message, human_message, response])
+        except Exception as e:
+            print(f"Error in decision making: {e}")
+            # If there's an error, default to waiting
+            state["context"]["fallback_action"] = "wait"
+            state["tool_error"] = f"Error occurred during decision making: {str(e)}. Using wait fallback."
         
         return state
     
-    def _execute_action(self, state: PokemonAgentState) -> PokemonAgentState:
-        """Node: Execute the decided action in the game."""
-        action = state["next_action"]
-        frames = state["context"].get("hold_frames", 10)
+    # Fixed _handle_tool_calls method to handle positional arguments correctly
+    def _handle_tool_calls(self, state: PokemonAgentState) -> PokemonAgentState:
+        """Node: Handle tool calls from the LLM with safe fallbacks."""
+        # Clear any previous tool error
+        state["tool_error"] = None
         
-        # Execute the action
-        result = self.emulator.press_button(action, frames)
+        # Check if we have tool calls to execute
+        if "tool_calls" in state["context"] and state["context"]["tool_calls"]:
+            tool_calls = state["context"]["tool_calls"]
+            
+            try:
+                # Process the first tool call
+                tool_call = tool_calls[0]
+                tool_name = tool_call['name']
+                tool_args = tool_call['args']
+                
+                # Log the tool call
+                print(f"Tool call: {tool_name} with args: {tool_args}")
+                print(tool_calls)
+                
+                # Execute the appropriate tool
+                if tool_name == "press_button":
+                    # Handle different argument formats
+                    if "button" in tool_args:
+                        # Named argument format
+                        button = tool_args.get("button", "")
+                        hold_frames = tool_args.get("hold_frames", 10)
+                    elif "__arg1" in tool_args:
+                        # Positional argument format
+                        button = tool_args.get("__arg1", "")
+                        hold_frames = tool_args.get("__arg2", 10)
+                    else:
+                        # Fallback for unknown format
+                        button = ""
+                        hold_frames = 10
+                        state["tool_error"] = f"Unknown argument format in press_button: {tool_args}"
+                    
+                    # Check if button is valid
+                    if button not in self.emulator.BUTTONS:
+                        state["tool_error"] = f"Invalid button: '{button}'. Using wait fallback."
+                        result = self.emulator.wait_frames(30)
+                        state["next_action"] = "wait"
+                        state["context"]["last_action"] = "wait_30"
+                        state["context"]["last_result"] = result
+                    else:
+                        # Press the button
+                        result = self.emulator.press_button(button, hold_frames)
+                        
+                        # Update action stats
+                        if button in self.action_stats:
+                            self.action_stats[button] += 1
+                        else:
+                            self.action_stats[button] = 1
+                        
+                        # Store the action and result
+                        state["next_action"] = button
+                        state["context"]["last_action"] = button
+                        state["context"]["last_result"] = result
+                    
+                elif tool_name == "navigate_to":
+                    # Handle different argument formats
+                    if "destination" in tool_args:
+                        destination = tool_args.get("destination", "")
+                    elif "__arg1" in tool_args:
+                        destination = tool_args.get("__arg1", "")
+                    else:
+                        destination = ""
+                        state["tool_error"] = f"Unknown argument format in navigate_to: {tool_args}"
+                    
+                    result = navigate_to(destination, self.emulator, self.knowledge_base)
+                    
+                    # Update action stats for navigation
+                    if "navigate" in self.action_stats:
+                        self.action_stats["navigate"] += 1
+                    else:
+                        self.action_stats["navigate"] = 1
+                    
+                    # Store the action and result
+                    state["next_action"] = f"navigate_to_{destination}"
+                    state["context"]["last_action"] = f"navigate_to_{destination}"
+                    state["context"]["last_result"] = result
+                    
+                elif tool_name == "update_knowledge":
+                    # Handle different argument formats
+                    if "section" in tool_args:
+                        section = tool_args.get("section", "")
+                        key = tool_args.get("key", "")
+                        value = tool_args.get("value", "")
+                    elif "__arg1" in tool_args:
+                        section = tool_args.get("__arg1", "")
+                        key = tool_args.get("__arg2", "")
+                        value = tool_args.get("__arg3", "")
+                    else:
+                        section = ""
+                        key = ""
+                        value = ""
+                        state["tool_error"] = f"Unknown argument format in update_knowledge: {tool_args}"
+                    
+                    result = update_knowledge(section, key, value, self.knowledge_base)
+                    
+                    # Update action stats for knowledge updates
+                    if "update_kb" in self.action_stats:
+                        self.action_stats["update_kb"] += 1
+                    else:
+                        self.action_stats["update_kb"] = 1
+                    
+                    # Store the action and result
+                    state["next_action"] = f"update_kb_{section}_{key}"
+                    state["context"]["last_action"] = f"update_kb_{section}_{key}"
+                    state["context"]["last_result"] = result
+                
+                elif tool_name == "wait_frames":
+                    # Handle different argument formats
+                    if "num_frames" in tool_args:
+                        num_frames = tool_args.get("num_frames", 30)
+                    elif "__arg1" in tool_args:
+                        num_frames = tool_args.get("__arg1", 30)
+                    else:
+                        num_frames = 30
+                        state["tool_error"] = f"Unknown argument format in wait_frames: {tool_args}"
+                    
+                    # Execute the wait tool
+                    result = self.emulator.wait_frames(num_frames)
+                    
+                    # Update action stats for waiting
+                    if "wait" in self.action_stats:
+                        self.action_stats["wait"] += 1
+                    else:
+                        self.action_stats["wait"] = 1
+                    
+                    # Store the action and result
+                    state["next_action"] = "wait"
+                    state["context"]["last_action"] = f"wait_{num_frames}"
+                    state["context"]["last_result"] = result
+                
+                else:
+                    # Unknown tool - use wait as a safe fallback
+                    state["tool_error"] = f"Unknown tool: {tool_name}. Using wait fallback."
+                    
+                    # Wait for 30 frames
+                    result = self.emulator.wait_frames(30)
+                    
+                    # Store the action and result
+                    state["next_action"] = "wait"
+                    state["context"]["last_action"] = "wait_30"
+                    state["context"]["last_result"] = result
+                
+                # Create tool message with result
+                tool_message = ToolMessage(
+                    content=result,
+                    name=tool_name,
+                    tool_call_id=tool_call['id']
+                )
+                
+                # Add the tool message to the conversation
+                state["messages"].append(tool_message)
+                
+            except Exception as e:
+                # Handle tool execution errors
+                error_msg = f"Error executing tool: {str(e)}"
+                traceback_str = traceback.format_exc()
+                print(f"{error_msg}\n{traceback_str}")
+                
+                # Store the error
+                state["tool_error"] = error_msg
+                
+                # Use wait as a safe fallback
+                try:
+                    # Wait for 30 frames
+                    result = self.emulator.wait_frames(30)
+                    
+                    # Store the fallback action and result
+                    state["next_action"] = "wait"
+                    state["context"]["last_action"] = "wait_30"
+                    state["context"]["last_result"] = result
+                    
+                    # Update action stats for waiting
+                    if "wait" in self.action_stats:
+                        self.action_stats["wait"] += 1
+                    else:
+                        self.action_stats["wait"] = 1
+                except Exception as e2:
+                    print(f"Even wait fallback failed: {e2}")
+                    state["context"]["last_result"] = "Both tool call and wait fallback failed."
         
-        # Update statistics
-        if action in self.action_stats:
-            self.action_stats[action] += 1
-        else:
-            self.action_stats[action] = 1
-        
-        # Create tool message with result
-        tool_message = ToolMessage(content=result, name="game_action")
-        
-        # Update state
-        state["messages"].append(tool_message)
-        state["context"]["last_action"] = action
-        state["context"]["last_result"] = result
-        
+        # Rest of method remains the same for fallback cases
         return state
     
     def _update_knowledge(self, state: PokemonAgentState) -> PokemonAgentState:
         """Node: Update the knowledge base with new information."""
         # Add action to history
-        self.knowledge_base.add_action(
-            state["context"]["last_action"],
-            state["context"]["last_result"]
-        )
+        action = state["context"].get("last_action", "unknown")
+        result = state["context"].get("last_result", "unknown")
         
-        # Add game state snapshot
+        self.knowledge_base.add_action(action, result)
         self.knowledge_base.add_game_state(state["game_state"])
-        
-        # Increment conversation turn counter
         self.conversation_turn_count += 1
         
         return state
@@ -764,29 +1040,37 @@ Be concise but include all essential information.
             
             # Create human message with conversation history
             history_text = "\n".join([
-                f"{msg.type}: {msg.content}" 
-                for msg in state["messages"][-20:] if hasattr(msg, 'type')
+                f"Action: {item['action']}, Result: {item['result']}" 
+                for item in self.knowledge_base.data["action_history"][-20:]
             ])
             
             human_message = HumanMessage(content=f"""
 Please summarize the recent game progress:
 
 {history_text}
+
+Previous summary (if any):
+{self.last_summary}
 """)
             
-            # Get summary from LLM
-            summary_response = self.llm.invoke([system_message, human_message])
-            
-            # Update last summary
-            self.last_summary = summary_response.content
-            
-            # Reset conversation turn counter
-            self.conversation_turn_count = 0
-            
-            # Clear messages but keep the summary
-            state["messages"] = [
-                SystemMessage(content="Previous progress summary: " + self.last_summary)
-            ]
+            try:
+                # Get summary from LLM
+                summary_response = self.llm.invoke([system_message, human_message])
+                
+                # Update last summary
+                self.last_summary = summary_response.content
+                
+                # Reset conversation turn counter
+                self.conversation_turn_count = 0
+                
+                # Clear messages but keep the summary
+                state["messages"] = [
+                    SystemMessage(content="Previous progress summary: " + self.last_summary)
+                ]
+            except Exception as e:
+                print(f"Error generating summary: {e}")
+                # Just continue without summarization if it fails
+                pass
         
         return state
     
@@ -810,6 +1094,9 @@ Please summarize the recent game progress:
     
     def run(self, num_steps=None):
         """Run the agent for a specified number of steps."""
+        if num_steps is None:
+            num_steps = float('inf')
+            
         if self.start_time is None:
             self.start()
         
@@ -832,15 +1119,25 @@ Please summarize the recent game progress:
                     "max_steps": num_steps,
                     "thread_id": thread_id,
                     "stop_requested": False
-                }
+                },
+                "tool_error": None
             }
             
             # Run the graph
-            for step, state in enumerate(self.graph.stream(
-                initial_state, 
-                {"configurable": {"thread_id": thread_id}}
-            )):
-                display(f"Step {step}: \n{state}")
+            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": None},
+            for step, state in enumerate(self.graph.stream(initial_state, {"thread_id": thread_id, "recursion_limit": 10000000000000000})):
+                try:
+                    # For debugging in Jupyter notebooks
+                    if 'display' in globals():
+                        ...
+                        # display(f"Step {step}: \n{self.emulator.format_game_state(state['game_state'])}")
+                        # display(f"Step {step}: \n{state['observation']}")
+                except:
+                    pass
+                # print_dict(state)
+                print(f'Step {step+1}:')
+                if state.get("messages"):
+                    print(state["messages"])
                 if state.get("next_action"):
                     # Print progress
                     print(f"Step {step+1}: {state['next_action']} -> {state['context'].get('last_result', '')}")
@@ -868,6 +1165,8 @@ Please summarize the recent game progress:
             print("\nStopped by user")
         except Exception as e:
             print(f"Error running agent: {e}")
+            traceback_str = traceback.format_exc()
+            print(f"Traceback:\n{traceback_str}")
         finally:
             # Save final state
             self.emulator.save_state("final.state")
@@ -893,7 +1192,6 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using LangGraph')
-    # parser.add_argument('--rom_path', default='roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Colorization).gb', help='Path to the Pokémon ROM file')
     parser.add_argument('rom_path', help='Path to the Pokémon ROM file')
     parser.add_argument('--api-key', help='API key (will use ANTHROPIC_API_KEY env var if not provided)')
     parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
@@ -908,7 +1206,7 @@ if __name__ == "__main__":
     parser.add_argument('--thinking_budget', type=int, default=2000, help='Thinking budget in tokens')
     
     args = parser.parse_args()
-    # print(f'{args.api_key = }')
+    
     # Create and run the agent
     sound = not args.no_sound
     agent = PokemonLangGraphAgent(
