@@ -10,6 +10,7 @@ from pokemon_llm_agent_base import PokemonGameInterface
 from pokemon_anthropic_agent import PokemonAnthropicAgent
 from pokemon_langchain_agent import PokemonLangChainAgent
 from pokemon_langgraph_agent import PokemonLangGraphAgent
+from pokemon_langgraph_agent_advanced import PokemonLangGraphAgent as PokemonLangGraphAgentAdvanced
 from pokemon_trainer import run_agent, setup_experiment_dir
 
 def main():
@@ -20,7 +21,7 @@ def main():
     
     # Agent configuration
     agent_group = parser.add_argument_group('Agent Configuration')
-    agent_group.add_argument('--agent', choices=['anthropic', 'langchain', 'langgraph'], default='anthropic',
+    agent_group.add_argument('--agent', choices=['anthropic', 'langchain', 'langgraph', 'langgraph_advanced'], default='anthropic',
                            help='Which type of agent to use (default: anthropic)')
     agent_group.add_argument('--api-key', help='API key (if not provided, uses ANTHROPIC_API_KEY env var)')
     agent_group.add_argument('--model', default='claude-3-7-sonnet-20250219',
@@ -105,6 +106,15 @@ def main():
                     api_key=api_key,
                     temperature=args.temperature,
                     observation_interval=args.observation_interval
+                )
+            elif args.agent == 'langgraph_advanced':
+                # From existing pokemon_trainer.py
+                agent = PokemonLangGraphAgentAdvanced(
+                    game_interface=game,
+                    model_name=args.model,
+                    api_key=api_key,
+                    observation_interval=args.observation_interval,
+                    checkpoint_dir=os.path.join(exp_dir, 'checkpoints')
                 )
             else:  # langgraph
                 agent = PokemonLangGraphAgent(

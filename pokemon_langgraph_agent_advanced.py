@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional, Tuple, TypedDict, Annotated
 import uuid
 from io import BytesIO
 from PIL import Image
+from IPython.display import display, Markdown, HTML
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END
@@ -14,6 +15,8 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain.tools import tool
+
 # from langchain_core.pydantic_v1 import BaseModel, Field
 from pydantic import BaseModel, Field
 from langchain_anthropic import ChatAnthropic
@@ -160,11 +163,11 @@ class GameEmulator:
         'money': 0xD347,               # Money (3 bytes, BCD format)
     }
     
-    def __init__(self, rom_path, headless=False, speed=1):
+    def __init__(self, rom_path, headless=False, speed=1, sound=True):
         """Initialize the game emulator with the ROM."""
         self.rom_path = rom_path
-        window_type = "null" if headless else "SDL2"
-        self.pyboy = PyBoy(rom_path, window_type=window_type)
+        window = "null" if headless else "SDL2"
+        self.pyboy = PyBoy(rom_path, window=window, sound=sound, sound_emulated=sound)
         self.pyboy.set_emulation_speed(speed)
         
         # Setup screen manager
@@ -469,8 +472,10 @@ class PokemonLangGraphAgent:
     """
     
     def __init__(self, rom_path, model_name="claude-3-7-sonnet-20250219", 
-                 api_key=None, temperature=0.2, 
-                 headless=False, speed=1,
+                 api_key=None, temperature=1.0,
+                 max_tokens=10000,
+                 thinking=False, thinking_budget=4000,
+                 headless=False, speed=1, sound=True,
                  checkpoint_dir="checkpoints"):
         """Initialize the LangGraph agent."""
         # Set up API key
@@ -481,16 +486,24 @@ class PokemonLangGraphAgent:
         # Set up model
         self.model_name = model_name
         self.temperature = temperature
-        
+        self.max_tokens = max_tokens
+        self.thinking = thinking
+        self.thinking_budget = thinking_budget
+        if thinking:
+            self.thinking_params =     { "type": "enabled", "budget_tokens": thinking_budget }
+        else:
+            self.thinking_params =     { "type": "disabled" } 
         # Create the LLM
         self.llm = ChatAnthropic(
             model_name=self.model_name,
             anthropic_api_key=self.api_key,
-            temperature=self.temperature
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            thinking=self.thinking_params,
         )
         
         # Initialize game emulator
-        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed)
+        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed, sound=sound)
         
         # Initialize knowledge base
         self.knowledge_base = KnowledgeBase()
@@ -827,6 +840,7 @@ Please summarize the recent game progress:
                 initial_state, 
                 {"configurable": {"thread_id": thread_id}}
             )):
+                display(f"Step {step}: \n{state}")
                 if state.get("next_action"):
                     # Print progress
                     print(f"Step {step+1}: {state['next_action']} -> {state['context'].get('last_result', '')}")
@@ -887,19 +901,27 @@ if __name__ == "__main__":
     parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for the LLM')
     parser.add_argument('--speed', type=int, default=1, help='Game speed multiplier')
+    parser.add_argument('--max-tokens', type=int, default=10000, help='Maximum tokens for LLM')
+    parser.add_argument('--no-sound', action='store_true', help='Disable sound')
     parser.add_argument('--checkpoint-dir', default='checkpoints', help='Directory for checkpoints')
-    parser.add_argument('--thinking', type=bool, default=False, help='Enable thinking mode')
+    parser.add_argument('--thinking', action='store_true', help='Enable thinking mode')
+    parser.add_argument('--thinking_budget', type=int, default=2000, help='Thinking budget in tokens')
     
     args = parser.parse_args()
     # print(f'{args.api_key = }')
     # Create and run the agent
+    sound = not args.no_sound
     agent = PokemonLangGraphAgent(
         rom_path=args.rom_path,
         model_name=args.model,
         api_key=args.api_key,
         temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        thinking=args.thinking,
+        thinking_budget=args.thinking_budget,
         headless=args.headless,
         speed=args.speed,
+        sound=sound,
         checkpoint_dir=args.checkpoint_dir
     )
     

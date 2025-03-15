@@ -14,7 +14,8 @@ ROM_PATH = "roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Coloriz
 def main():
     # Start PyBoy and load the ROM
     # pyboy = PyBoy(ROM_PATH, game_wrapper=True)
-    pyboy = PyBoy(ROM_PATH, window_type="null")
+    # pyboy = PyBoy(ROM_PATH, window_type="null")
+    pyboy = PyBoy(ROM_PATH, window="SDL2", sound_emulated=False)  # Use SDL2 window for rendering
     pyboy.set_emulation_speed(1)  # Set to 1 for normal speed
     
     # In PyBoy 2.x.x, booting animation happens automatically
@@ -39,7 +40,7 @@ def main():
                 pyboy.tick(1, True)
                 pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
                 print("Pressed START button")
-                print(game_screen)
+                # print(game_screen)
             
             # Add your agent code here to:
             # 1. Process the game screen

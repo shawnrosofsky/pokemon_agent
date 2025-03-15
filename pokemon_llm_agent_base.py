@@ -97,7 +97,7 @@ class PokemonGameInterface:
         self.pyboy.set_emulation_speed(speed)
         
         # Setup bot support manager
-        self.screen_manager = self.pyboy.botsupport_manager().screen()
+        self.screen_manager = self.pyboy.screen
         
         # Game state tracking
         self.frame_count = 0

@@ -169,3 +169,15 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+experiments/experiment_20250313_210500/config.json
+experiments/experiment_20250313_210720/config.json
+experiments/experiment_20250313_210748/config.json
+roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Colorization).gb
+roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Colorization).gb.ram
+roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Colorization).gb.state
+roms/pokered_color/pokeblue_color_gen2.ips
+roms/pokered_color/pokeblue_color_vanilla.ips
+roms/pokered_color/pokered_color_gen2.ips
+roms/pokered_color/pokered_color_vanilla.ips
+roms/pokered_color/README.txt
+saves/final.state

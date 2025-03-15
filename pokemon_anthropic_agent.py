@@ -5,7 +5,7 @@ import time
 import json
 from typing import Optional, Dict, Any
 import anthropic
-from anthropic.types.message import Image
+# from anthropic.types.message import Image
 
 from pokemon_llm_agent_base import PokemonLLMAgentBase, PokemonGameInterface
 

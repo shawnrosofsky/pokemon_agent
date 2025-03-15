@@ -1,7 +1,8 @@
 import sys
 import time
 import numpy as np
-from pyboy import PyBoy, WindowEvent
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from PIL import Image
@@ -42,13 +43,14 @@ class PokemonController:
         'battle_type': 0xD057,      # Non-zero when in battle
         'menu_open': 0xD730,        # Menu state (e.g., 0xD730+0xD734 indicates menu open)
         'pokemon_count': 0xD163,    # Number of Pokémon in party
-        'first_pokemon_hp': 0xD16C  # First Pokémon's current HP (2 bytes)
+        'first_pokemon_hp': 0xD16C, # First Pokémon's current HP (2 bytes)
+        # 'bike_state': 0xD355,       # Bike state (0: off, 1: on)
     }
     
-    def __init__(self, rom_path):
+    def __init__(self, rom_path, sound=False):
         """Initialize the Pokémon controller with the ROM path."""
         self.rom_path = rom_path
-        self.pyboy = PyBoy(rom_path, window="null")  # Use null window for script control
+        self.pyboy = PyBoy(rom_path, window="null", sound_emulated=sound)  # Use null window for script control
         self.pyboy.set_emulation_speed(1)
         self.screen_buffer = None
         print("PyBoy initialized successfully")
@@ -90,7 +92,7 @@ class PokemonController:
         
     def get_screen(self):
         """Get the current screen as a numpy array."""
-        return np.array(self.pyboy.screen.screen_ndarray())
+        return np.array(self.pyboy.screen.ndarray)
     
     def get_memory_value(self, address):
         """Get the value at a specific memory address."""
@@ -152,12 +154,13 @@ class PokemonController:
         print("Emulator closed")
 
 
-def run_interactive_demo(rom_path):
+def run_interactive_demo(rom_path, sound=False):
     """Run an interactive demo with visualization."""
-    controller = PokemonController(rom_path)
+    controller = PokemonController(rom_path, sound=sound)
     controller.start()
     
     # Setup the visualization
+    # plt.ion()
     fig, ax = plt.subplots(figsize=(10, 9))
     plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.3)
     
@@ -184,6 +187,11 @@ def run_interactive_demo(rom_path):
             for btn, btn_ax in btn_axs.items():
                 if event.inaxes == btn_ax:
                     controller.press_button(btn)
+                    print(f'{controller.get_player_position() = }')
+                    print(f'{controller.get_current_map() = }')
+                    print(f'{controller.is_in_battle() = }')
+                    print(f'{controller.get_party_info() = }')
+                    # print(controller.pyboy.memory)
                     break
     
     # Connect the button event
@@ -217,6 +225,7 @@ def run_interactive_demo(rom_path):
         return [screen_plot, status_text]
     
     # Run the animation
+    # ani = FuncAnimation(fig, update, frames=None, blit=True, interval=50)
     ani = FuncAnimation(fig, update, frames=None, blit=True, interval=50)
     plt.show()
     
