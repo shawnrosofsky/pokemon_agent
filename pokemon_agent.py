@@ -147,12 +147,23 @@ class GameEmulator:
         'money': 0xD347,
     }
     
-    def __init__(self, rom_path, headless=False, speed=1):
+    def __init__(self, rom_path, headless=False, speed=1, sound=False):
         """Initialize the game emulator."""
         self.rom_path = rom_path
         window = "null" if headless else "SDL2"
-        self.pyboy = PyBoy(rom_path, window=window)
+        
+        # Initialize PyBoy with sound options
+        self.pyboy = PyBoy(
+            rom_path, 
+            window=window,
+            sound=sound, 
+            sound_emulated=sound
+        )
+        
         self.pyboy.set_emulation_speed(speed)
+        
+        # Get screen accessor
+        self.screen = self.pyboy.screen
         
         self.frame_count = 0
         self.save_dir = "saves"
@@ -212,7 +223,7 @@ class GameEmulator:
             else:
                 return None
         
-        return self.pyboy.get_memory_value(address)
+        return self.pyboy.memory[address]
     
     def get_2byte_value(self, address):
         """Get 2-byte value (little endian)."""
@@ -228,8 +239,7 @@ class GameEmulator:
     
     def get_screen_base64(self):
         """Get current screen as base64 string."""
-        screen = self.pyboy.screen
-        screen_array = screen.ndarray
+        screen_array = self.screen.ndarray
         pil_image = Image.fromarray(screen_array)
         buffered = BytesIO()
         pil_image.save(buffered, format="PNG")
@@ -303,9 +313,9 @@ class GameEmulator:
 class PokemonAgent:
     """LLM Agent for playing Pokémon using Anthropic Claude."""
     
-    def __init__(self, rom_path, model_name="claude-3-sonnet-20240229", 
+    def __init__(self, rom_path, model_name="claude-3-7-sonnet-20250219", 
                  api_key=None, temperature=0.7, headless=False, speed=1,
-                 output_to_file=False, log_file=None):
+                 sound=True, output_to_file=False, log_file=None):
         """Initialize the agent."""
         # Setup API
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -317,7 +327,7 @@ class PokemonAgent:
         self.temperature = temperature
         
         # Setup game and knowledge
-        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed)
+        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed, sound=sound)
         self.kb = KnowledgeBase()
         
         # Setup output manager
@@ -582,6 +592,8 @@ Then, use a tool to take the most appropriate action.
             accumulated_content = []
             tool_use_blocks = []
             current_text = ""
+            current_block_type = None
+            current_tool_use = None
             
             for event in stream:
                 if event.type == "content_block_delta":
@@ -593,8 +605,21 @@ Then, use a tool to take the most appropriate action.
                         # For tool use blocks
                         if event.delta.name:
                             self.output.print(f"\n[Using tool: {event.delta.name}]", end="", flush=True)
+                            if current_tool_use is None:
+                                current_tool_use = {"type": "tool_use", "name": event.delta.name}
+                            else:
+                                current_tool_use["name"] = event.delta.name
                         if event.delta.input:
                             self.output.print(f" with parameters: {event.delta.input}", end="", flush=True)
+                            if current_tool_use is None:
+                                current_tool_use = {"type": "tool_use", "input": event.delta.input}
+                            else:
+                                current_tool_use["input"] = event.delta.input
+                        if event.delta.id:
+                            if current_tool_use is None:
+                                current_tool_use = {"type": "tool_use", "id": event.delta.id}
+                            else:
+                                current_tool_use["id"] = event.delta.id
                 
                 elif event.type == "message_delta":
                     # Message complete
@@ -602,20 +627,27 @@ Then, use a tool to take the most appropriate action.
                 
                 elif event.type == "content_block_start":
                     # Start of a new content block
-                    if event.content_block.type == "tool_use":
+                    current_block_type = event.content_block.type
+                    if current_block_type == "tool_use":
                         self.output.print(f"\n[Starting to use a tool]", end="", flush=True)
-                        tool_use_blocks.append(event.content_block)
+                        current_tool_use = {"type": "tool_use"}
+                        # Only add if it has an ID
+                        if hasattr(event.content_block, 'id') and event.content_block.id:
+                            current_tool_use["id"] = event.content_block.id
                 
                 elif event.type == "content_block_stop":
                     # End of a content block
-                    if event.content_block.type == "text" and current_text:
+                    if current_block_type == "text" and current_text:
                         accumulated_content.append({
                             "type": "text",
                             "text": current_text
                         })
                         current_text = ""
-                    elif event.content_block.type == "tool_use":
-                        accumulated_content.append(event.content_block)
+                    elif current_block_type == "tool_use" and current_tool_use:
+                        accumulated_content.append(current_tool_use)
+                        current_tool_use = None
+                    
+                    current_block_type = None
             
             self.output.print("")  # End the streaming output with a newline
             
@@ -833,23 +865,6 @@ Keep the summary concise but informative.
             
             # Clean up
             self.emulator.close()
-                
-        except KeyboardInterrupt:
-            print("\nStopped by user")
-        except Exception as e:
-            print(f"Error running agent: {e}")
-            traceback_str = traceback.format_exc()
-            print(f"Traceback:\n{traceback_str}")
-        finally:
-            # Save final state
-            self.emulator.save_state("final.state")
-            
-            # Save action stats
-            with open("action_stats.json", 'w') as f:
-                json.dump(self.action_stats, f, indent=2)
-            
-            # Clean up
-            self.emulator.close()
     
     def close(self):
         """Clean up resources."""
@@ -862,11 +877,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using Claude')
     parser.add_argument('rom_path', help='Path to the Pokémon ROM file')
     parser.add_argument('--api-key', help='API key (will use ANTHROPIC_API_KEY env var if not provided)')
-    parser.add_argument('--model', default='claude-3-sonnet-20240229', help='Model to use')
+    parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
     parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
     parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for the LLM')
     parser.add_argument('--speed', type=int, default=1, help='Game speed multiplier')
+    parser.add_argument('--no-sound', action='store_true', help='Disable game sound')
     parser.add_argument('--log-to-file', action='store_true', help='Log output to file')
     parser.add_argument('--log-file', help='Path to log file (default: pokemon_agent.log)')
     
@@ -880,6 +896,7 @@ if __name__ == "__main__":
         temperature=args.temperature,
         headless=args.headless,
         speed=args.speed,
+        sound=not args.no_sound,
         output_to_file=args.log_to_file,
         log_file=args.log_file
     )

@@ -615,16 +615,16 @@ class PokemonAnthropicAgent:
             
             # Create a system message for Claude
             system_prompt = """
-You are an expert Pokémon player. You analyze the game state and choose the best action to make progress.
+    You are an expert Pokémon player. You analyze the game state and choose the best action to make progress.
 
-Focus on:
-1. Understanding the current situation (location, battles, UI)
-2. Selecting appropriate actions to advance in the game
-3. Using tools to control the Game Boy
+    Focus on:
+    1. Understanding the current situation (location, battles, UI)
+    2. Selecting appropriate actions to advance in the game
+    3. Using tools to control the Game Boy
 
-If you're unsure what to do, or if there was an error with the previous action, use wait_frames
-instead of pressing buttons randomly. Waiting is safer than pressing buttons when uncertain.
-"""
+    If you're unsure what to do, or if there was an error with the previous action, use wait_frames
+    instead of pressing buttons randomly. Waiting is safer than pressing buttons when uncertain.
+    """
 
             # Build message content
             message_content = [
@@ -639,26 +639,51 @@ instead of pressing buttons randomly. Waiting is safer than pressing buttons whe
                 {
                     "type": "text",
                     "text": f"""
-Please analyze the current game state:
+    Please analyze the current game state:
 
-{state_text}
+    {state_text}
 
-Recent actions:
-{kb_summary}
+    Recent actions:
+    {kb_summary}
 
-{f"Note about previous action: {self.last_error}" if self.last_error else ""}
+    {f"Note about previous action: {self.last_error}" if self.last_error else ""}
 
-Based on the screen and game state information, what action should I take next?
-"""
+    Based on the screen and game state information, what action should I take next?
+    """
                 }
             ]
 
             # Prepare the message for Claude
-            messages: List[MessageParam] = []
+            messages = []
             
-            # Add message history if we have it
-            if len(self.message_history) > 0:
-                messages.extend(self.message_history[-5:])  # Last 5 exchanges
+            # IMPORTANT: Check for conversation chain validity before using history
+            valid_history = []
+            if self.message_history:
+                # Validate the conversation chain
+                is_valid = True
+                for i in range(len(self.message_history) - 1):
+                    # Check if a message contains tool_use without matching tool_result
+                    if (i < len(self.message_history) - 1 and 
+                        self.message_history[i].get("role") == "assistant" and
+                        isinstance(self.message_history[i].get("content"), list) and
+                        any(block.get("type") == "tool_use" for block in self.message_history[i].get("content", []) 
+                            if isinstance(block, dict)) and
+                        self.message_history[i+1].get("role") == "user" and
+                        (not isinstance(self.message_history[i+1].get("content"), list) or
+                        not any(block.get("type") == "tool_result" for block in self.message_history[i+1].get("content", [])
+                            if isinstance(block, dict)))):
+                        is_valid = False
+                        break
+                
+                if is_valid:
+                    valid_history = self.message_history[-5:]  # Use last 5 exchanges if valid
+                else:
+                    # Reset history if invalid
+                    print("Invalid message history detected, resetting conversation")
+                    self.message_history = []
+            
+            # Add valid history if any
+            messages.extend(valid_history)
             
             # Add the current message
             messages.append({
@@ -677,18 +702,19 @@ Based on the screen and game state information, what action should I take next?
             )
             
             # Add the response to message history
-            self.message_history.append({
-                "role": "user",
-                "content": message_content
-            })
-            self.message_history.append({
-                "role": "assistant",
-                "content": response.content
-            })
-            
-            # Keep message history at reasonable size
-            if len(self.message_history) > 20:
-                self.message_history = self.message_history[-20:]
+            if not self.message_history or messages != self.message_history[-len(messages):]:
+                self.message_history.append({
+                    "role": "user",
+                    "content": message_content
+                })
+                self.message_history.append({
+                    "role": "assistant",
+                    "content": response.content
+                })
+                
+                # Keep message history at reasonable size
+                if len(self.message_history) > 20:
+                    self.message_history = self.message_history[-20:]
             
             return response
             
@@ -696,8 +722,8 @@ Based on the screen and game state information, what action should I take next?
             print(f"Error analyzing game state: {e}")
             traceback_str = traceback.format_exc()
             print(traceback_str)
-            return None
-    
+            return None    
+        
     def handle_tool_calls(self, response):
         """Handle tool calls from Claude's response."""
         # Process tool usage if any
