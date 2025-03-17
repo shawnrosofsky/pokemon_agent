@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Pokemon Agent (Non-Streaming Version) - Main module for the Pokemon AI agent system.
-Integrates the emulator, knowledge base, and tools with Claude API.
-This version uses non-streaming API calls for simplicity and reliability.
+Pokemon Agent - Simplified version with fixed message history handling.
+This version correctly validates conversation history and handles tool calls properly.
 """
 
 import os
@@ -54,10 +53,10 @@ class OutputManager:
 
 
 class PokemonAgent:
-    """LLM Agent for playing Pokémon using Anthropic Claude (Non-Streaming Version)."""
+    """LLM Agent for playing Pokémon using Anthropic Claude."""
     
     def __init__(self, rom_path, model_name="claude-3-7-sonnet-20250219", 
-                 api_key=None, temperature=1.0, max_tokens=1000, headless=False, speed=1,
+                 api_key=None, temperature=0.7, headless=False, speed=1,
                  sound=True, output_to_file=False, log_file=None):
         """Initialize the agent."""
         # Setup API
@@ -68,7 +67,6 @@ class PokemonAgent:
         self.client = anthropic.Anthropic(api_key=self.api_key)
         self.model = model_name
         self.temperature = temperature
-        self.max_tokens = max_tokens
         
         # Setup components
         self.emulator = GameEmulator(rom_path, headless=headless, speed=speed, sound=sound)
@@ -91,10 +89,86 @@ class PokemonAgent:
         """Start the game."""
         self.emulator.start_game(skip_intro=True)
     
+    def validate_message_history(self):
+        """
+        Validate and clean up message history to ensure valid conversation.
+        Returns a proper sequence of messages ready for API use.
+        """
+        # Start with empty validated history
+        valid_history = []
+        
+        # Keep track of whether the last message has a tool_use
+        last_had_tool_use = False
+        
+        # Create valid message pairs
+        for i in range(len(self.message_history)):
+            msg = self.message_history[i]
+            
+            # Check for assistant messages with tool_use
+            if msg["role"] == "assistant":
+                has_tool_use = False
+                for content in msg.get("content", []):
+                    if isinstance(content, dict) and content.get("type") == "tool_use":
+                        has_tool_use = True
+                        break
+                
+                # If this is a normal assistant message without tool_use, just add it
+                if not has_tool_use:
+                    valid_history.append(msg)
+                    last_had_tool_use = False
+                else:
+                    # This is a tool_use message
+                    # Check if next message is the tool_result
+                    if i + 1 < len(self.message_history) and self.message_history[i+1]["role"] == "user":
+                        next_msg = self.message_history[i+1]
+                        has_tool_result = False
+                        for content in next_msg.get("content", []):
+                            if isinstance(content, dict) and content.get("type") == "tool_result":
+                                has_tool_result = True
+                                break
+                        
+                        # Only add the pair if next message has tool_result
+                        if has_tool_result:
+                            valid_history.append(msg)
+                            valid_history.append(next_msg)
+                            # Skip the next message since we already added it
+                            i += 1
+                            last_had_tool_use = False
+                        else:
+                            # If next message doesn't have tool_result, add only this message
+                            valid_history.append(msg)
+                            last_had_tool_use = True
+                    else:
+                        # No next message or not a user message
+                        valid_history.append(msg)
+                        last_had_tool_use = True
+            
+            # For user messages
+            elif msg["role"] == "user":
+                has_tool_result = False
+                for content in msg.get("content", []):
+                    if isinstance(content, dict) and content.get("type") == "tool_result":
+                        has_tool_result = True
+                        break
+                
+                # Only add user messages with tool_result if last message had tool_use
+                if has_tool_result and not last_had_tool_use:
+                    # Skip this message as it contains a tool_result without a preceding tool_use
+                    continue
+                else:
+                    valid_history.append(msg)
+                    last_had_tool_use = False
+        
+        # Ensure we end with a message that doesn't require a response
+        if valid_history and valid_history[-1]["role"] == "assistant" and last_had_tool_use:
+            valid_history.pop()  # Remove the last message as it requires a tool_result
+        
+        # Take only the last few messages to keep context manageable
+        return valid_history[-6:] if len(valid_history) > 6 else valid_history
+    
     def get_action(self) -> Tuple[str, str]:
         """
         Get current game state, analyze with Claude, and execute the action.
-        This version uses the non-streaming API for simplicity and reliability.
         
         Returns:
             Tuple of (action, result)
@@ -147,39 +221,74 @@ Then, use a tool to take the most appropriate action.
                 }
             ]
 
-            # Add current message to history 
-            self.message_history.append({
+            # Validate message history
+            valid_history = self.validate_message_history()
+            
+            # Add current message
+            current_message = {
                 "role": "user",
                 "content": message_content
-            })
+            }
+            
+            # Use validated history plus current message for API call
+            messages = valid_history + [current_message]
+            
+            # Debug: Print conversation for troubleshooting
+            # self.output.print_section("DEBUG: CONVERSATION HISTORY")
+            # for idx, msg in enumerate(messages):
+            #     self.output.print(f"Message {idx} - Role: {msg['role']}")
+            #     for content_item in msg.get('content', []):
+            #         if isinstance(content_item, dict):
+            #             self.output.print(f"  Content type: {content_item.get('type')}")
             
             # Get tool definitions
             tools = self.tools_manager.define_tools()
-            
-            # We'll keep only the most recent conversation context (up to 10 messages)
-            messages = self.message_history[-10:]
             
             # Make API call (non-streaming)
             self.output.print_section("CALLING CLAUDE")
             self.output.print("Waiting for Claude's response...")
             
             try:
+                # Print game state periodically during API call
+                def tick_during_api_call():
+                    for _ in range(60):  # Animate for a short time
+                        self.emulator.pyboy.tick()
+                        time.sleep(1/60)  # 60 FPS
+                
+                # Tick the game to keep it responsive during the API call
+                tick_during_api_call()
+                
                 response = self.client.messages.create(
                     model=self.model,
                     system=system_prompt,
                     messages=messages,
-                    max_tokens=self.max_tokens,
+                    max_tokens=1000,
                     temperature=self.temperature,
                     tools=tools
                 )
                 
-                # Add Claude's response to history
+                # Store message for history
+                self.message_history.append(current_message)
+                
+                # Add Claude's response to history (convert from API response to storable dict)
+                assistant_content = []
+                for content in response.content:
+                    if content.type == "text":
+                        assistant_content.append({
+                            "type": "text",
+                            "text": content.text
+                        })
+                    elif content.type == "tool_use":
+                        assistant_content.append({
+                            "type": "tool_use",
+                            "name": content.name,
+                            "input": content.input,
+                            "id": content.id
+                        })
+                
                 assistant_message = {
                     "role": "assistant",
-                    "content": [
-                        {"type": content.type, **{k: v for k, v in vars(content).items() if k != "type"}}
-                        for content in response.content
-                    ]
+                    "content": assistant_content
                 }
                 self.message_history.append(assistant_message)
                 
@@ -246,6 +355,11 @@ Then, use a tool to take the most appropriate action.
                 traceback_str = traceback.format_exc()
                 self.output.print(traceback_str)
                 self.last_error = str(e)
+                
+                # If we hit an error, clear the message history to reset the conversation
+                if "tool_result" in str(e) and "tool_use" in str(e):
+                    self.output.print("Detected conversation structure error, resetting history")
+                    self.message_history = []
                 
                 # Fallback to wait
                 result = self.emulator.wait_frames(30)
@@ -323,8 +437,10 @@ Keep the summary concise but informative.
                 
                 # Reset conversation
                 self.turn_count = 0
-                self.message_history = [
-                    {
+                self.message_history = []
+                
+                if summary_text:
+                    self.message_history.append({
                         "role": "assistant",
                         "content": [
                             {
@@ -332,8 +448,7 @@ Keep the summary concise but informative.
                                 "text": f"Previous progress summary: {self.last_summary}"
                             }
                         ]
-                    }
-                ]
+                    })
                 
                 self.output.print_section("SUMMARY", summary_text)
                 self.output.print("Context reset with summary")
@@ -360,6 +475,11 @@ Keep the summary concise but informative.
                 # Print progress
                 self.output.print_section(f"STEP {step_count} SUMMARY", f"Action: {action}\nResult: {result}")
                 
+                # Tick the game to animate between steps
+                for _ in range(15):  # Animate for a short time
+                    self.emulator.pyboy.tick()
+                    time.sleep(1/60)  # 60 FPS
+                
                 # Show stats every 10 steps
                 if step_count % 10 == 0:
                     stats_text = "Action distribution:\n"
@@ -376,9 +496,6 @@ Keep the summary concise but informative.
                 
                 # Check for summarization
                 self.check_for_summarization()
-                
-                # Small delay between steps
-                time.sleep(0.5)
                 
         except KeyboardInterrupt:
             self.output.print_section("INTERRUPTED", "Stopped by user")
@@ -407,14 +524,13 @@ Keep the summary concise but informative.
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using Claude (Non-Streaming Version)')
+    parser = argparse.ArgumentParser(description='Run a Pokémon AI agent using Claude')
     parser.add_argument('rom_path', help='Path to the Pokémon ROM file')
     parser.add_argument('--api-key', help='API key (will use ANTHROPIC_API_KEY env var if not provided)')
     parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
-    parser.add_argument('--max_tokens', default=1000, help='Max tokens for Claude response')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
     parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
-    parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for the LLM')
+    parser.add_argument('--temperature', type=float, default=0.7, help='Temperature for the LLM')
     parser.add_argument('--speed', type=int, default=1, help='Game speed multiplier')
     parser.add_argument('--no-sound', action='store_true', help='Disable game sound')
     parser.add_argument('--log-to-file', action='store_true', help='Log output to file')
@@ -428,7 +544,6 @@ if __name__ == "__main__":
         model_name=args.model,
         api_key=args.api_key,
         temperature=args.temperature,
-        max_tokens=args.max_tokens,
         headless=args.headless,
         speed=args.speed,
         sound=not args.no_sound,
