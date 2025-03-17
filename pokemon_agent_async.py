@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Pokemon Agent - Asynchronous version that keeps the game running
-continuously while waiting for Claude's response without timeouts.
+Pokemon Agent - Fully Asynchronous version where everything runs in the background.
+All API calls (including summarization) are done asynchronously while the game runs.
 """
 
 import os
@@ -60,7 +60,7 @@ class OutputManager:
 class AsyncClaudeClient:
     """Asynchronous client for calling Claude API without blocking the main thread."""
     
-    def __init__(self, api_key, model="claude-3-7-sonnet-20250219", temperature=0.7, output_manager=None):
+    def __init__(self, api_key, model="claude-3-7-sonnet-20250219", temperature=1.0, output_manager=None):
         """Initialize the async Claude client."""
         self.api_key = api_key
         self.model = model
@@ -105,31 +105,34 @@ class AsyncClaudeClient:
                     system = request.get('system', '')
                     messages = request.get('messages', [])
                     max_tokens = request.get('max_tokens', 1000)
+                    temperature = request.get('temperature', self.temperature)
                     tools = request.get('tools', None)
                     request_id = request.get('request_id', None)
+                    request_type = request.get('request_type', 'action')  # Default to action
                     
                     # Make the API call
                     try:
                         if self.output:
-                            self.output.print(f"Processing request ID: {request_id}")
+                            self.output.print(f"Processing {request_type} request ID: {request_id}")
                         
                         response = self.client.messages.create(
                             model=self.model,
                             system=system,
                             messages=messages,
                             max_tokens=max_tokens,
-                            temperature=self.temperature,
+                            temperature=temperature,
                             tools=tools
                         )
                         
                         if self.output:
-                            self.output.print(f"Got response for request ID: {request_id}")
+                            self.output.print(f"Got response for {request_type} request ID: {request_id}")
                         
                         # Put the response in the response queue
                         self.response_queue.put({
                             'success': True,
                             'response': response,
-                            'request_id': request_id
+                            'request_id': request_id,
+                            'request_type': request_type
                         })
                         
                     except Exception as e:
@@ -141,7 +144,8 @@ class AsyncClaudeClient:
                         self.response_queue.put({
                             'success': False,
                             'error': error_msg,
-                            'request_id': request_id
+                            'request_id': request_id,
+                            'request_type': request_type
                         })
                 
                 finally:
@@ -152,7 +156,7 @@ class AsyncClaudeClient:
                 if self.output:
                     self.output.print(f"Error in async client thread: {str(e)}")
     
-    def call_claude(self, system, messages, tools=None, max_tokens=1000, request_id=None):
+    def call_claude(self, system, messages, tools=None, max_tokens=1000, temperature=None, request_id=None, request_type='action'):
         """
         Queue an API call to Claude.
         Returns immediately, response will be available in the response queue.
@@ -164,47 +168,85 @@ class AsyncClaudeClient:
             'system': system,
             'messages': messages,
             'max_tokens': max_tokens,
+            'temperature': temperature if temperature is not None else self.temperature,
             'tools': tools,
-            'request_id': request_id
+            'request_id': request_id,
+            'request_type': request_type
         })
         
         return request_id
     
-    def get_response(self, request_id=None, block=False, timeout=None):
+    def get_response(self, request_id=None, request_type=None, block=False, timeout=None):
         """
         Get a response from the response queue.
         If request_id is provided, only return a response with that ID.
+        If request_type is provided, only return a response of that type.
         If block is True, wait until a response is available or timeout is reached.
         If block is False, return None if no response is available.
         """
-        if request_id is None:
+        # If we want a specific response
+        if request_id is not None or request_type is not None:
+            # If both are provided, match both
+            if request_id is not None and request_type is not None:
+                # Look for a specific request_id AND request_type
+                while True:
+                    try:
+                        response = self.response_queue.get(block=block, timeout=timeout)
+                        if response['request_id'] == request_id and response['request_type'] == request_type:
+                            return response
+                        else:
+                            # Put it back in the queue and try again
+                            self.response_queue.put(response)
+                            if not block:
+                                return None
+                    except queue.Empty:
+                        return None
+            
+            # If only request_id is provided
+            elif request_id is not None:
+                # Look for a specific request_id
+                while True:
+                    try:
+                        response = self.response_queue.get(block=block, timeout=timeout)
+                        if response['request_id'] == request_id:
+                            return response
+                        else:
+                            # Put it back in the queue and try again
+                            self.response_queue.put(response)
+                            if not block:
+                                return None
+                    except queue.Empty:
+                        return None
+            
+            # If only request_type is provided
+            else:  # request_type is not None
+                # Look for a specific request_type
+                while True:
+                    try:
+                        response = self.response_queue.get(block=block, timeout=timeout)
+                        if response['request_type'] == request_type:
+                            return response
+                        else:
+                            # Put it back in the queue and try again
+                            self.response_queue.put(response)
+                            if not block:
+                                return None
+                    except queue.Empty:
+                        return None
+        else:
             # Just get any response
             try:
                 return self.response_queue.get(block=block, timeout=timeout)
             except queue.Empty:
                 return None
-        else:
-            # Look for a specific request_id
-            while True:
-                try:
-                    response = self.response_queue.get(block=block, timeout=timeout)
-                    if response['request_id'] == request_id:
-                        return response
-                    else:
-                        # Put it back in the queue and try again
-                        self.response_queue.put(response)
-                        if not block:
-                            return None
-                except queue.Empty:
-                    return None
 
 
 class PokemonAgent:
-    """LLM Agent for playing Pokémon using asynchronous Claude API calls."""
+    """LLM Agent for playing Pokémon using fully asynchronous Claude API calls."""
     
     def __init__(self, rom_path, model_name="claude-3-7-sonnet-20250219", 
-                 api_key=None, temperature=0.7, headless=False, speed=1,
-                 sound=True, output_to_file=False, log_file=None):
+                 api_key=None, temperature=1.0, headless=False, speed=1,
+                 sound=True, output_to_file=False, log_file=None, summary_interval=10):
         """Initialize the agent."""
         # Setup API
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -232,13 +274,20 @@ class PokemonAgent:
         # Conversation management
         self.message_history = []
         self.turn_count = 0
-        self.max_turns_before_summary = 10
+        self.max_turns_before_summary = summary_interval
         self.last_summary = ""
         
         # Current state tracking
         self.last_error = None
-        self.waiting_for_api = False
-        self.current_request_id = None
+        
+        # Action request tracking
+        self.waiting_for_action = False
+        self.action_request_id = None
+        
+        # Summary request tracking
+        self.waiting_for_summary = False
+        self.summary_request_id = None
+        self.summary_due = False
         
         # Frame timing
         self.target_fps = 60
@@ -335,8 +384,8 @@ class PokemonAgent:
         Returns True if request was made, False otherwise.
         """
         try:
-            # If we're already waiting for an API response, don't make a new request
-            if self.waiting_for_api:
+            # If we're already waiting for an action response, don't make a new request
+            if self.waiting_for_action:
                 return False
             
             # Get game state
@@ -408,8 +457,8 @@ Then, use a tool to take the most appropriate action.
             request_id = str(uuid.uuid4())
             
             # Make asynchronous API call
-            self.output.print_section("CALLING CLAUDE")
-            self.output.print(f"Waiting for Claude's response (request ID: {request_id})")
+            self.output.print_section("CALLING CLAUDE FOR ACTION")
+            self.output.print(f"Waiting for Claude's action response (request ID: {request_id})")
             self.output.print("Game continues running while Claude is thinking...")
             
             self.claude_client.call_claude(
@@ -417,51 +466,57 @@ Then, use a tool to take the most appropriate action.
                 messages=messages,
                 tools=tools,
                 max_tokens=1000,
-                request_id=request_id
+                temperature=self.temperature,
+                request_id=request_id,
+                request_type='action'
             )
             
             # Start waiting for API response
-            self.waiting_for_api = True
-            self.current_request_id = request_id
+            self.waiting_for_action = True
+            self.action_request_id = request_id
             
             return True
             
         except Exception as e:
-            self.output.print_section("REQUEST ERROR")
+            self.output.print_section("ACTION REQUEST ERROR")
             self.output.print(f"Error: {str(e)}")
             traceback_str = traceback.format_exc()
             self.output.print(traceback_str)
             self.last_error = str(e)
             
             # Not waiting for API anymore
-            self.waiting_for_api = False
-            self.current_request_id = None
+            self.waiting_for_action = False
+            self.action_request_id = None
             
             return False
     
-    def check_for_response(self) -> Tuple[bool, Optional[str], Optional[str]]:
+    def check_for_action_response(self) -> Tuple[bool, Optional[str], Optional[str]]:
         """
-        Check if a response from Claude is available.
+        Check if a response for an action request is available.
         Returns (success, action, result) tuple.
         If no response is available yet, returns (False, None, None).
         """
-        if not self.waiting_for_api or self.current_request_id is None:
+        if not self.waiting_for_action or self.action_request_id is None:
             return False, None, None
         
-        # Check for response without blocking, but only for our specific request ID
-        api_result = self.claude_client.get_response(request_id=self.current_request_id, block=False)
+        # Check for response without blocking, but only for our specific action request
+        api_result = self.claude_client.get_response(
+            request_id=self.action_request_id, 
+            request_type='action',
+            block=False
+        )
         
         if api_result is None:
-            # No response yet for our request ID
+            # No response yet for our action request
             return False, None, None
         
-        # We got a response, so we're no longer waiting
-        self.waiting_for_api = False
+        # We got a response, so we're no longer waiting for an action
+        self.waiting_for_action = False
         
         if not api_result['success']:
             # API call failed
             error_msg = api_result.get('error', 'Unknown error')
-            self.output.print_section("API ERROR")
+            self.output.print_section("ACTION API ERROR")
             self.output.print(f"Error: {error_msg}")
             self.last_error = error_msg
             
@@ -556,25 +611,34 @@ Then, use a tool to take the most appropriate action.
             self.kb.add_action("wait", "No tool used")
             return True, "wait", result
     
-    def check_for_summarization(self):
-        """Check if we need to summarize and reset conversation."""
-        self.turn_count += 1
-        
-        if self.turn_count >= self.max_turns_before_summary and not self.waiting_for_api:
-            try:
-                self.output.print_section("GENERATING SUMMARY", f"After {self.turn_count} turns")
-                
-                # Get game state for additional context
-                game_state = self.emulator.get_game_state()
-                state_text = self.emulator.format_game_state(game_state)
-                
-                # For summarization, we'll use a blocking API call for simplicity
-                summary_response = anthropic.Anthropic(api_key=self.api_key).messages.create(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"""
+    def request_summarization(self) -> bool:
+        """
+        Request a game progress summary from Claude asynchronously.
+        Returns True if request was made, False otherwise.
+        """
+        if self.waiting_for_summary:
+            return False
+            
+        try:
+            # Get game state for additional context
+            game_state = self.emulator.get_game_state()
+            state_text = self.emulator.format_game_state(game_state)
+            
+            # Make the summarization request
+            self.output.print_section("REQUESTING SUMMARY")
+            self.output.print(f"Requesting summary after {self.turn_count} turns")
+            self.output.print("Game continues running during summarization...")
+            
+            # Generate a unique request ID
+            request_id = str(uuid.uuid4())
+            
+            # Make asynchronous API call for summary
+            self.claude_client.call_claude(
+                system="You are a Pokémon game expert. Provide a concise summary of the player's progress.",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""
 Please summarize the recent game progress:
 
 Current game state:
@@ -594,47 +658,106 @@ Summarize:
 
 Keep the summary concise but informative.
 """
-                        }
-                    ],
-                    max_tokens=500,
-                    temperature=0.7
-                )
-                
-                # Extract summary text
-                summary_text = ""
-                for content in summary_response.content:
-                    if content.type == "text":
-                        summary_text = content.text
-                        break
-                
-                # Update last summary
-                self.last_summary = summary_text
-                
-                # Store in knowledge base
-                self.kb.update("player_progress", "last_summary", summary_text)
-                
-                # Reset conversation
-                self.turn_count = 0
-                self.message_history = []
-                
-                if summary_text:
-                    self.message_history.append({
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": f"Previous progress summary: {self.last_summary}"
-                            }
-                        ]
-                    })
-                
-                self.output.print_section("SUMMARY", summary_text)
-                self.output.print("Context reset with summary")
-                
-            except Exception as e:
-                self.output.print_section("SUMMARIZATION ERROR", str(e))
-                # Continue without resetting if summarization fails
-                self.turn_count = self.max_turns_before_summary - 5  # Try again in 5 turns
+                    }
+                ],
+                max_tokens=500,
+                temperature=self.temperature,
+                request_id=request_id,
+                request_type='summary'
+            )
+            
+            # Start waiting for summary response
+            self.waiting_for_summary = True
+            self.summary_request_id = request_id
+            
+            return True
+            
+        except Exception as e:
+            self.output.print_section("SUMMARY REQUEST ERROR")
+            self.output.print(f"Error: {str(e)}")
+            traceback_str = traceback.format_exc()
+            self.output.print(traceback_str)
+            
+            # Not waiting for summary anymore
+            self.waiting_for_summary = False
+            self.summary_request_id = None
+            
+            return False
+    
+    def check_for_summary_response(self) -> bool:
+        """
+        Check if a summary response is available.
+        Returns True if a summary was processed, False otherwise.
+        """
+        if not self.waiting_for_summary or self.summary_request_id is None:
+            return False
+        
+        # Check for response without blocking, but only for our summary request
+        api_result = self.claude_client.get_response(
+            request_id=self.summary_request_id,
+            request_type='summary',
+            block=False
+        )
+        
+        if api_result is None:
+            # No response yet for our summary request
+            return False
+        
+        # We got a response, so we're no longer waiting for a summary
+        self.waiting_for_summary = False
+        self.summary_due = False
+        
+        if not api_result['success']:
+            # API call failed
+            error_msg = api_result.get('error', 'Unknown error')
+            self.output.print_section("SUMMARY API ERROR")
+            self.output.print(f"Error: {error_msg}")
+            # Continue without summary
+            return True
+        
+        # API call succeeded
+        response = api_result['response']
+        
+        # Extract summary text
+        summary_text = ""
+        for content in response.content:
+            if content.type == "text":
+                summary_text = content.text
+                break
+        
+        # Update last summary
+        self.last_summary = summary_text
+        
+        # Store in knowledge base
+        self.kb.update("player_progress", "last_summary", summary_text)
+        
+        # Reset conversation and turn count
+        self.turn_count = 0
+        self.message_history = []
+        
+        if summary_text:
+            self.message_history.append({
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Previous progress summary: {self.last_summary}"
+                    }
+                ]
+            })
+        
+        self.output.print_section("SUMMARY", summary_text)
+        self.output.print("Context reset with summary")
+        
+        return True
+    
+    def check_for_summarization(self):
+        """Check if we need to summarize and reset conversation."""
+        self.turn_count += 1
+        
+        # If it's time for a summary and we're not already waiting for one
+        if self.turn_count >= self.max_turns_before_summary and not self.waiting_for_summary:
+            self.summary_due = True
     
     def run(self, num_steps=None):
         """Run the agent for specified steps, keeping the game running continuously."""
@@ -661,11 +784,23 @@ Keep the summary concise but informative.
                     frames_run += 1
                     last_frame_time = now
                 
-                # Check for response if we're waiting for one
-                if self.waiting_for_api:
-                    success, action, result = self.check_for_response()
+                # First, check if a summary is due and we're not already waiting for one
+                if self.summary_due and not self.waiting_for_summary and not self.waiting_for_action:
+                    # Request a summary asynchronously
+                    self.request_summarization()
+                
+                # Then, check if a summary response is available
+                if self.waiting_for_summary:
+                    if self.check_for_summary_response():
+                        # If we got a summary response, request the next action
+                        if not self.waiting_for_action:
+                            self.request_next_action()
+                
+                # Check for action response if we're waiting for one
+                if self.waiting_for_action:
+                    success, action, result = self.check_for_action_response()
                     
-                    # If we got a response
+                    # If we got an action response
                     if success:
                         # Count this as a complete step
                         step_count += 1
@@ -693,13 +828,21 @@ Keep the summary concise but informative.
                         # Check for summarization
                         self.check_for_summarization()
                         
-                        # Request the next action
+                        # If a summary is due, request it
+                        if self.summary_due and not self.waiting_for_summary:
+                            self.request_summarization()
+                        else:
+                            # Otherwise, request the next action
+                            self.request_next_action()
+                
+                # If we're not waiting for anything, start a new action request
+                if not self.waiting_for_action and not self.waiting_for_summary:
+                    # First check if a summary is due
+                    if self.summary_due:
+                        self.request_summarization()
+                    else:
+                        # Otherwise, request the next action
                         self.request_next_action()
-                else:
-                    # If we're not waiting for a response, request one
-                    if not self.request_next_action():
-                        # If we couldn't make a request, sleep a bit to avoid tight loop
-                        time.sleep(0.01)
                 
                 # Sleep a tiny bit to avoid hogging the CPU
                 time.sleep(0.001)
@@ -739,12 +882,14 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
     parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
-    parser.add_argument('--temperature', type=float, default=0.7, help='Temperature for the LLM')
+    parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for the LLM')
     parser.add_argument('--speed', type=int, default=1, help='Game speed multiplier')
     parser.add_argument('--no-sound', action='store_true', help='Disable game sound')
     parser.add_argument('--log-to-file', action='store_true', help='Log output to file')
     parser.add_argument('--log-file', help='Path to log file (default: pokemon_agent.log)')
     parser.add_argument('--fps', type=int, default=60, help='Target frames per second')
+    parser.add_argument('--summary-interval', type=int, default=10, 
+                      help='Number of turns between summaries (default: 10)')
     
     args = parser.parse_args()
     
@@ -758,7 +903,8 @@ if __name__ == "__main__":
         speed=args.speed,
         sound=not args.no_sound,
         output_to_file=args.log_to_file,
-        log_file=args.log_file
+        log_file=args.log_file,
+        summary_interval=args.summary_interval
     )
     
     try:
