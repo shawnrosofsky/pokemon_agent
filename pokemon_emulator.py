@@ -52,47 +52,47 @@ class GameEmulator:
         'player_direction': 0xD367,    # Direction (0: down, 4: up, 8: left, 0xC: right)
         'player_movement': 0xD528,     # Movement state
         'bike_riding': 0xD730,         # Bit 5 of this byte is set when riding bicycle
-        
+
         # Battle system
         'battle_type': 0xD057,         # Non-zero when in battle
         'battle_menu_cursor': 0xCC28,  # Position of cursor in battle menu
         'battle_turn': 0xCCD3,         # Whose turn it is in battle
         'enemy_pokemon_hp': 0xCFE7,    # Enemy Pokémon HP (2 bytes, little endian)
         'enemy_pokemon_level': 0xCFE8, # Enemy Pokémon level
-        'enemy_pokemon_species': 0xCFDE, # Enemy Pokémon species ID
-        'enemy_pokemon_status': 0xCFF1, # Enemy Pokémon status condition
-        
+        'enemy_pokemon_species': 0xCFDE,  # Enemy Pokémon species ID
+        'enemy_pokemon_status': 0xCFF1,    # Enemy Pokémon status condition
+
         # Player Pokémon party
         'pokemon_count': 0xD163,       # Number of Pokémon in party
-        'party_species': 0xD164,       # Party Pokémon species (up to 6 bytes)
-        'party_hp': 0xD16C,            # Party Pokémon current HP (2 bytes each)
-        'party_status': 0xD16F,        # Party Pokémon status condition
-        'party_level': 0xD18C,         # Party Pokémon levels
-        'party_max_hp': 0xD18D,        # Party Pokémon max HP (2 bytes each)
-        'party_attack': 0xD197,        # Party Pokémon attack stat (2 bytes each)
-        'party_defense': 0xD1A1,       # Party Pokémon defense stat (2 bytes each)
-        'party_speed': 0xD1AB,         # Party Pokémon speed stat (2 bytes each)
-        'party_special': 0xD1B5,       # Party Pokémon special stat (2 bytes each)
-        'party_types': 0xD1BF,         # Party Pokémon types (2 bytes per Pokémon)
-        'party_moves': 0xD1D7,         # Party Pokémon moves (4 bytes per Pokémon)
-        'party_pp': 0xD1F1,            # Party Pokémon PP for moves
-        
+        'party_species': 0xD164,       # 6 bytes: species IDs
+        'party_hp': 0xD16C,            # 12 bytes: current HP (2 bytes each)
+        'party_status': 0xD178,        # 6 bytes: status conditions (corrected; was 0xD16F)
+        'party_level': 0xD17E,         # 6 bytes: levels (corrected; was 0xD18C)
+        'party_max_hp': 0xD184,        # 12 bytes: max HP (corrected; was 0xD18D)
+        'party_attack': 0xD190,        # 12 bytes: attack stat (corrected; was 0xD197)
+        'party_defense': 0xD19A,       # 12 bytes: defense stat (corrected; was 0xD1A1)
+        'party_speed': 0xD1A4,         # 12 bytes: speed stat (corrected; was 0xD1AB)
+        'party_special': 0xD1AE,       # 12 bytes: special stat (corrected; was 0xD1B5)
+        'party_types': 0xD1B8,         # 6 bytes: types (corrected; was 0xD1BF)
+        'party_moves': 0xD1BE,         # 24 bytes: moves (corrected; was 0xD1D7)
+        'party_pp': 0xD1E8,            # 24 bytes: PP for moves (corrected; was 0xD1F1)
+
         # Menu and text
         'text_progress': 0xFF8C,       # Text box progress (non-zero when text is displaying)
         'text_id': 0xF8C8,             # ID of the text being displayed
         'menu_open': 0xFFF5,           # Menu state (0 = no menu open)
         'dialog_type': 0xD355,         # Type of dialog box showing
-        
+
         # Items
         'item_count': 0xD31D,          # Number of items in bag
         'money': 0xD347,               # Money (3 bytes, BCD format)
-        
+
         # Badges and progress
         'badges': 0xD356,              # Badges obtained (each bit = one badge)
         'events': 0xD747,              # Event flags (large area, multiple addresses)
-        
+
         # Various game states
-        'game_mode': 0xD057,           # Current game mode
+        'game_mode': 0xD057,           # Current game mode (shared with battle flag)
         'joypad_state': 0xFF8B,        # Current joypad state
     }
     
