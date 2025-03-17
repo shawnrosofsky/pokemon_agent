@@ -15,10 +15,9 @@ import anthropic
 from typing import Dict, List, Any, Optional, Tuple
 
 # Import our modules
-# Make sure these modules are in the same directory or properly installed
-# from pokemon_emulator import GameEmulator
-# from pokemon_knowledge import KnowledgeBase
-# from pokemon_tools import PokemonTools
+from pokemon_emulator import GameEmulator
+from pokemon_knowledge import KnowledgeBase
+from pokemon_tools import PokemonTools
 
 
 class OutputManager:
