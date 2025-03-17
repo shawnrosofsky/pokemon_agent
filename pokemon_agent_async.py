@@ -2,6 +2,7 @@
 """
 Pokemon Agent - Fully Asynchronous version where everything runs in the background.
 All API calls (including summarization) are done asynchronously while the game runs.
+Fixed API issues with summary requests.
 """
 
 import os
@@ -60,7 +61,7 @@ class OutputManager:
 class AsyncClaudeClient:
     """Asynchronous client for calling Claude API without blocking the main thread."""
     
-    def __init__(self, api_key, model="claude-3-7-sonnet-20250219", temperature=1.0, output_manager=None):
+    def __init__(self, api_key, model="claude-3-7-sonnet-20250219", temperature=0.7, output_manager=None):
         """Initialize the async Claude client."""
         self.api_key = api_key
         self.model = model
@@ -115,14 +116,22 @@ class AsyncClaudeClient:
                         if self.output:
                             self.output.print(f"Processing {request_type} request ID: {request_id}")
                         
-                        response = self.client.messages.create(
-                            model=self.model,
-                            system=system,
-                            messages=messages,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            tools=tools
-                        )
+                        # Build API call parameters
+                        api_params = {
+                            "model": self.model,
+                            "system": system,
+                            "messages": messages,
+                            "max_tokens": max_tokens,
+                            "temperature": temperature
+                        }
+                        
+                        # Only include tools if provided and not None - this is especially 
+                        # important for summary requests which don't need tools
+                        if tools is not None:
+                            api_params["tools"] = tools
+                        
+                        # Make the API call with the appropriate parameters
+                        response = self.client.messages.create(**api_params)
                         
                         if self.output:
                             self.output.print(f"Got response for {request_type} request ID: {request_id}")
@@ -164,16 +173,21 @@ class AsyncClaudeClient:
         if request_id is None:
             request_id = str(uuid.uuid4())
             
-        self.request_queue.put({
+        # Create request dictionary
+        request = {
             'system': system,
             'messages': messages,
             'max_tokens': max_tokens,
             'temperature': temperature if temperature is not None else self.temperature,
-            'tools': tools,
             'request_id': request_id,
             'request_type': request_type
-        })
+        }
         
+        # Only include tools for action requests, not for summaries
+        if tools is not None and request_type == 'action':
+            request['tools'] = tools
+        
+        self.request_queue.put(request)
         return request_id
     
     def get_response(self, request_id=None, request_type=None, block=False, timeout=None):
@@ -245,7 +259,7 @@ class PokemonAgent:
     """LLM Agent for playing Pokémon using fully asynchronous Claude API calls."""
     
     def __init__(self, rom_path, model_name="claude-3-7-sonnet-20250219", 
-                 api_key=None, temperature=1.0, headless=False, speed=1,
+                 api_key=None, temperature=0.7, headless=False, speed=1,
                  sound=True, output_to_file=False, log_file=None, summary_interval=10):
         """Initialize the agent."""
         # Setup API
@@ -632,7 +646,7 @@ Then, use a tool to take the most appropriate action.
             # Generate a unique request ID
             request_id = str(uuid.uuid4())
             
-            # Make asynchronous API call for summary
+            # Make asynchronous API call for summary - note that tools is INTENTIONALLY NOT included
             self.claude_client.call_claude(
                 system="You are a Pokémon game expert. Provide a concise summary of the player's progress.",
                 messages=[
@@ -664,6 +678,7 @@ Keep the summary concise but informative.
                 temperature=self.temperature,
                 request_id=request_id,
                 request_type='summary'
+                # NO tools parameter for summary requests - this is key!
             )
             
             # Start waiting for summary response
@@ -882,14 +897,13 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='claude-3-7-sonnet-20250219', help='Model to use')
     parser.add_argument('--headless', action='store_true', help='Run in headless mode (no window)')
     parser.add_argument('--steps', type=int, help='Number of steps to run (infinite if not specified)')
-    parser.add_argument('--temperature', type=float, default=1.0, help='Temperature for the LLM')
+    parser.add_argument('--temperature', type=float, default=0.7, help='Temperature for the LLM')
     parser.add_argument('--speed', type=int, default=1, help='Game speed multiplier')
     parser.add_argument('--no-sound', action='store_true', help='Disable game sound')
     parser.add_argument('--log-to-file', action='store_true', help='Log output to file')
     parser.add_argument('--log-file', help='Path to log file (default: pokemon_agent.log)')
     parser.add_argument('--fps', type=int, default=60, help='Target frames per second')
-    parser.add_argument('--summary-interval', type=int, default=10, 
-                      help='Number of turns between summaries (default: 10)')
+    parser.add_argument('--summary-interval', type=int, default=10, help='Number of turns between summaries (default: 10)')
     
     args = parser.parse_args()
     
