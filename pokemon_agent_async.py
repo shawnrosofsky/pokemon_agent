@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Pokemon Agent - Asynchronous version that keeps the game running
-continuously while Claude is thinking about its next move.
+continuously while waiting for Claude's response without timeouts.
 """
 
 import os
 import time
 import json
+import uuid
 import queue
 import threading
 import traceback
@@ -109,6 +110,9 @@ class AsyncClaudeClient:
                     
                     # Make the API call
                     try:
+                        if self.output:
+                            self.output.print(f"Processing request ID: {request_id}")
+                        
                         response = self.client.messages.create(
                             model=self.model,
                             system=system,
@@ -117,6 +121,9 @@ class AsyncClaudeClient:
                             temperature=self.temperature,
                             tools=tools
                         )
+                        
+                        if self.output:
+                            self.output.print(f"Got response for request ID: {request_id}")
                         
                         # Put the response in the response queue
                         self.response_queue.put({
@@ -150,6 +157,9 @@ class AsyncClaudeClient:
         Queue an API call to Claude.
         Returns immediately, response will be available in the response queue.
         """
+        if request_id is None:
+            request_id = str(uuid.uuid4())
+            
         self.request_queue.put({
             'system': system,
             'messages': messages,
@@ -160,16 +170,33 @@ class AsyncClaudeClient:
         
         return request_id
     
-    def get_response(self, block=False, timeout=None):
+    def get_response(self, request_id=None, block=False, timeout=None):
         """
         Get a response from the response queue.
+        If request_id is provided, only return a response with that ID.
         If block is True, wait until a response is available or timeout is reached.
         If block is False, return None if no response is available.
         """
-        try:
-            return self.response_queue.get(block=block, timeout=timeout)
-        except queue.Empty:
-            return None
+        if request_id is None:
+            # Just get any response
+            try:
+                return self.response_queue.get(block=block, timeout=timeout)
+            except queue.Empty:
+                return None
+        else:
+            # Look for a specific request_id
+            while True:
+                try:
+                    response = self.response_queue.get(block=block, timeout=timeout)
+                    if response['request_id'] == request_id:
+                        return response
+                    else:
+                        # Put it back in the queue and try again
+                        self.response_queue.put(response)
+                        if not block:
+                            return None
+                except queue.Empty:
+                    return None
 
 
 class PokemonAgent:
@@ -212,8 +239,6 @@ class PokemonAgent:
         self.last_error = None
         self.waiting_for_api = False
         self.current_request_id = None
-        self.frames_since_action = 0
-        self.max_frames_between_actions = 300  # About 5 seconds at 60 FPS
         
         # Frame timing
         self.target_fps = 60
@@ -380,11 +405,12 @@ Then, use a tool to take the most appropriate action.
             self.temp_current_message = current_message
             
             # Generate a unique request ID
-            request_id = f"request_{int(time.time())}_{hash(str(messages)[:100])}"
+            request_id = str(uuid.uuid4())
             
             # Make asynchronous API call
             self.output.print_section("CALLING CLAUDE")
-            self.output.print("Waiting for Claude's response (game continues running)...")
+            self.output.print(f"Waiting for Claude's response (request ID: {request_id})")
+            self.output.print("Game continues running while Claude is thinking...")
             
             self.claude_client.call_claude(
                 system=system_prompt,
@@ -397,7 +423,6 @@ Then, use a tool to take the most appropriate action.
             # Start waiting for API response
             self.waiting_for_api = True
             self.current_request_id = request_id
-            self.frames_since_action = 0
             
             return True
             
@@ -420,23 +445,18 @@ Then, use a tool to take the most appropriate action.
         Returns (success, action, result) tuple.
         If no response is available yet, returns (False, None, None).
         """
-        if not self.waiting_for_api:
+        if not self.waiting_for_api or self.current_request_id is None:
             return False, None, None
         
-        # Check for response without blocking
-        api_result = self.claude_client.get_response(block=False)
+        # Check for response without blocking, but only for our specific request ID
+        api_result = self.claude_client.get_response(request_id=self.current_request_id, block=False)
         
         if api_result is None:
-            # No response yet
+            # No response yet for our request ID
             return False, None, None
         
-        # Process the response
+        # We got a response, so we're no longer waiting
         self.waiting_for_api = False
-        
-        if api_result['request_id'] != self.current_request_id:
-            # This is a response for a different request, ignore it
-            self.output.print("Received response for a different request, ignoring")
-            return False, None, None
         
         if not api_result['success']:
             # API call failed
@@ -639,22 +659,7 @@ Keep the summary concise but informative.
                     # Run the frame
                     self.emulator.pyboy.tick()
                     frames_run += 1
-                    self.frames_since_action += 1
                     last_frame_time = now
-                    
-                    # Check for timeout between actions
-                    if self.frames_since_action >= self.max_frames_between_actions and self.waiting_for_api:
-                        self.output.print("API call taking too long, executing a wait action as fallback")
-                        self.waiting_for_api = False
-                        result = self.emulator.wait_frames(30)
-                        self.kb.add_action("wait", "API timeout fallback")
-                        
-                        # Count this as a complete step
-                        step_count += 1
-                        self.output.print_section(f"STEP {step_count} SUMMARY", f"Action: wait\nResult: {result}")
-                        
-                        # Request the next action
-                        self.request_next_action()
                 
                 # Check for response if we're waiting for one
                 if self.waiting_for_api:
