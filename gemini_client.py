@@ -84,7 +84,7 @@ class AsyncGeminiClient(AsyncLLMClient):
                             #     tool_config={"function_calling_config": {"mode": "auto"}}
                             # )
                         else:
-                            response = self.client.models.generate_content(contents=gemini_messages)
+                            response = self.client.models.generate_content(model=self.model, contents=gemini_messages)
                         
                         # Convert Gemini response to Anthropic-like format
                         anthropic_response = self._convert_to_anthropic_response(response, request_type)
