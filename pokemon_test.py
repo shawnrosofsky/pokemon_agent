@@ -11,6 +11,7 @@ from pokemon_emulator import GameEmulator
 # Path to your Pokemon Red ROM file (you need to provide this legally)
 # ROM_PATH = "path/to/your/pokemon_red.gb"
 ROM_PATH = "roms/Pokemon Red Version (Colorization)/Pokemon Red Version (Colorization).gb"
+# ROM_PATH = "roms/Pokemon Red Version (Colorization).gb"
 
 def print_game_state(emulator: GameEmulator):
     """Print current game state."""

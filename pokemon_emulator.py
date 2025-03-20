@@ -59,23 +59,35 @@ class GameEmulator:
         'battle_turn': 0xCCD3,         # Whose turn it is in battle
         'enemy_pokemon_hp': 0xCFE7,    # Enemy Pokémon HP (2 bytes, little endian)
         'enemy_pokemon_level': 0xCFE8, # Enemy Pokémon level
-        'enemy_pokemon_species': 0xCFDE,  # Enemy Pokémon species ID
-        'enemy_pokemon_status': 0xCFF1,    # Enemy Pokémon status condition
+        # 'enemy_pokemon_species': 0xCFDE,  # Enemy Pokémon species ID
+        'enemy_pokemon_species': 0xCFE5,  # Enemy Pokémon species ID
+        # 'enemy_pokemon_status': 0xCFF1,    # Enemy Pokémon status condition
+        'enemy_pokemon_status': 0xCFE9,    # Enemy Pokémon status condition
 
         # Player Pokémon party
         'pokemon_count': 0xD163,       # Number of Pokémon in party
         'party_species': 0xD164,       # 6 bytes: species IDs
-        'party_hp': 0xD16C,            # 12 bytes: current HP (2 bytes each)
+        # 'party_hp': 0xD16C,            # 12 bytes: current HP (2 bytes each)
+        'party_hp': 0xD016,            # 12 bytes: current HP (2 bytes each)
         'party_status': 0xD178,        # 6 bytes: status conditions (corrected; was 0xD16F)
         'party_level': 0xD17E,         # 6 bytes: levels (corrected; was 0xD18C)
-        'party_max_hp': 0xD184,        # 12 bytes: max HP (corrected; was 0xD18D)
-        'party_attack': 0xD190,        # 12 bytes: attack stat (corrected; was 0xD197)
-        'party_defense': 0xD19A,       # 12 bytes: defense stat (corrected; was 0xD1A1)
-        'party_speed': 0xD1A4,         # 12 bytes: speed stat (corrected; was 0xD1AB)
-        'party_special': 0xD1AE,       # 12 bytes: special stat (corrected; was 0xD1B5)
-        'party_types': 0xD1B8,         # 6 bytes: types (corrected; was 0xD1BF)
-        'party_moves': 0xD1BE,         # 24 bytes: moves (corrected; was 0xD1D7)
-        'party_pp': 0xD1E8,            # 24 bytes: PP for moves (corrected; was 0xD1F1)
+        # 'party_max_hp': 0xD184,        # 12 bytes: max HP (corrected; was 0xD18D)
+        'party_max_hp': 0xD024,        # 12 bytes: max HP (corrected; was 0xD18D)
+        'party_attack': 0xD026,        # 12 bytes: attack stat (corrected; was 0xD197)
+        # 'party_attack': 0xD190,        # 12 bytes: attack stat (corrected; was 0xD197)
+        # 'party_defense': 0xD19A,       # 12 bytes: defense stat (corrected; was 0xD1A1)
+        'party_defense': 0xD028,       # 12 bytes: defense stat (corrected; was 0xD1A1)
+        # 'party_speed': 0xD1A4,         # 12 bytes: speed stat (corrected; was 0xD1AB)
+        'party_speed': 0xD02A,         # 12 bytes: speed stat (corrected; was 0xD1AB)
+        # 'party_special': 0xD1AE,       # 12 bytes: special stat (corrected; was 0xD1B5)
+        'party_special': 0xD02C,       # 12 bytes: special stat (corrected; was 0xD1B5)
+        # 'party_types': 0xD1B8,         # 6 bytes: types (corrected; was 0xD1BF)
+        # 'party_types': 0xD01A,         # 6 bytes: types (corrected; was 0xD1BF)
+        'party_types': 0xD170,         # 6 bytes: types (corrected; was 0xD1BF)
+        # 'party_moves': 0xD1BE,         # 24 bytes: moves (corrected; was 0xD1D7)
+        'party_moves': 0xD01C,         # 24 bytes: moves (corrected; was 0xD1D7)
+        # 'party_pp': 0xD1E8,            # 24 bytes: PP for moves (corrected; was 0xD1F1)
+        'party_pp': 0xD02D,            # 24 bytes: PP for moves (corrected; was 0xD1F1)
 
         # Menu and text
         'text_progress': 0xFF8C,       # Text box progress (non-zero when text is displaying)
