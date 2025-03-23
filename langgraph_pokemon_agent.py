@@ -2,6 +2,7 @@
 LangGraph Pokémon Agent - A fully asynchronous agent for playing Pokémon
 using LangGraph for orchestration and PyBoy for emulation.
 With enhanced memory management to prevent context duplication.
+Now using LangChain for LLM calls.
 """
 
 import os
@@ -15,13 +16,25 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, TypedDict, Annotated, Literal
 from typing_extensions import TypedDict, NotRequired
 
-import anthropic
+# Replace anthropic direct import with langchain imports
 from PIL import Image
 from pydantic import BaseModel, Field
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, START
 from langgraph.graph import MessagesState
-from langchain_core.messages import RemoveMessage, SystemMessage
+from langchain_core.messages import RemoveMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+
+# Langchain output parsing
+from langchain.output_parsers.structured import StructuredOutputParser
+from langchain.output_parsers.json import JsonOutputParser
+
+# Langchain model integrations
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 
 # Import our modules
 from langgraph_emulator_adapter import GameEmulatorAdapter
@@ -94,7 +107,8 @@ class PokemonAgent:
         knowledge_base: KnowledgeBase,  # Using the knowledge base passed from main
         tools_adapter: PokemonToolsAdapter,  # Using the tools adapter passed from main
         model_name: str = "claude-3-7-sonnet-20250219", 
-        api_key: Optional[str] = None, 
+        api_key: Optional[str] = None,
+        provider: str = "claude",  # Provider can be "claude", "openai", "gemini", "ollama"
         temperature: float = 0.7, 
         headless: bool = False, 
         speed: int = 1,
@@ -106,9 +120,19 @@ class PokemonAgent:
     ):
         """Initialize the agent."""
         # Setup API
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self.api_key = api_key
         if not self.api_key:
-            raise ValueError("API key required. Set ANTHROPIC_API_KEY env var or pass directly.")
+            # Try to get API key from environment based on provider
+            if provider == "claude":
+                self.api_key = os.environ.get("ANTHROPIC_API_KEY")
+            elif provider == "openai":
+                self.api_key = os.environ.get("OPENAI_API_KEY")
+            elif provider == "gemini":
+                self.api_key = os.environ.get("GOOGLE_API_KEY")
+                
+        # For Claude, OpenAI, and Gemini, we need an API key
+        if provider in ["claude", "openai", "gemini"] and not self.api_key:
+            raise ValueError(f"{provider.capitalize()} API key required. Set appropriate environment variable or pass directly.")
         
         # Setup output manager
         self.output = OutputManager(output_to_file=output_to_file, log_file=log_file)
@@ -120,17 +144,18 @@ class PokemonAgent:
         self.tools_manager = tools_adapter
         
         # Agent settings
-        self.model = model_name
+        self.provider = provider.lower()
+        self.model_name = model_name  # Store original model name
         self.temperature = temperature
         self.summary_interval = summary_interval
         self.token_limit = token_limit
         
-        # Initialize tokenizer for Claude (approximation using tiktoken)
-        # For Claude, we use 'cl100k_base' as a reasonable approximation
+        # Initialize tokenizer for token counting (approximation using tiktoken)
+        # For most models, cl100k_base is a reasonable approximation
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
         
-        # Create Claude client
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+        # Create LangChain model
+        self.llm = self._create_langchain_model()
         
         # Setup async event loop and state
         self.running = False
@@ -146,6 +171,41 @@ class PokemonAgent:
         
         # Create the graph structure
         self.build_graph()
+    
+    def _create_langchain_model(self) -> BaseChatModel:
+        """Create the appropriate LangChain model based on the provider."""
+        if self.provider == "claude":
+            return ChatAnthropic(
+                model=self.model_name,
+                temperature=self.temperature,
+                anthropic_api_key=self.api_key,
+                max_tokens=4000,
+            )
+        
+        elif self.provider == "openai":
+            return ChatOpenAI(
+                model=self.model_name,
+                temperature=self.temperature,
+                openai_api_key=self.api_key,
+                max_tokens=4000,
+            )
+        
+        elif self.provider == "gemini":
+            return ChatGoogleGenerativeAI(
+                model=self.model_name,
+                temperature=self.temperature,
+                google_api_key=self.api_key,
+                max_output_tokens=4000,
+            )
+        
+        elif self.provider == "ollama":
+            return ChatOllama(
+                model=self.model_name,
+                temperature=self.temperature,
+            )
+        
+        else:
+            raise ValueError(f"Unsupported provider: {self.provider}")
     
     def count_tokens(self, text: str) -> int:
         """Count tokens in a text string using the tokenizer."""
@@ -277,8 +337,27 @@ class PokemonAgent:
         """Node to get the agent's decision on what action to take."""
         self.output.print_section("AGENT DECISION")
         
-        # System prompt for the agent
-        system_prompt = """
+        # Import LangChain's structured output tools
+        from langchain.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import JsonOutputParser
+        from langchain_core.output_parsers import StructuredOutputParser
+        from langchain_core.pydantic_v1 import BaseModel, Field
+
+        # Define a schema for the response
+        class PokemonAction(BaseModel):
+            """Action to take in the Pokemon game."""
+            analysis: str = Field(description="Your analysis of the current game state and situation")
+            action: str = Field(description="The button to press: up, down, left, right, a, b, start, select, or wait")
+            hold_frames: int = Field(default=10, description="Number of frames to hold the button (1-30)")
+                
+            def __str__(self):
+                return f"Analysis: {self.analysis}\nAction: {self.action}\nHold Frames: {self.hold_frames}"
+        
+        # Create output parser
+        parser = JsonOutputParser(pydantic_object=PokemonAction)
+        
+        # Create system prompt template
+        system_template = """
 You are an expert Pokémon player. Analyze the game state and decide on the best action to take.
 
 First, think step-by-step about:
@@ -288,27 +367,28 @@ First, think step-by-step about:
 4. Available actions and their potential outcomes
 
 Then, decide on the best action to take. Be specific about which button to press and for how long.
-Use one of: up, down, left, right, a, b, start, select, or wait if you need to wait for something to happen.
+Use one of these actions only: up, down, left, right, a, b, start, select, or wait if you need to wait for something to happen.
+
+{format_instructions}
 """
 
         # Get the last summary if available
         last_summary = state.get("last_summary", "")
         if last_summary:
-            system_prompt += f"\n\nRecent Game Progress Summary:\n{last_summary}"
+            system_template += f"\n\nRecent Game Progress Summary:\n{last_summary}"
 
-        # Prepare the message content
-        message_content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": state["screen_base64"]
-                }
-            },
-            {
-                "type": "text",
-                "text": f"""
+        # Format instructions for the parser
+        format_instructions = parser.get_format_instructions()
+        
+        # Create the system message with format instructions
+        system_message = SystemMessage(content=system_template.format(format_instructions=format_instructions))
+        
+        # Prepare the image content for LangChain
+        # Different providers handle image data differently
+        image_str = state["screen_base64"]
+        
+        # Create the human message with game state info
+        human_message_text = f"""
 Current game state:
 {state['game_state_text']}
 
@@ -318,56 +398,257 @@ Recent actions:
 {f"Note about previous action: {state['last_error']}" if state.get('last_error') else ""}
 
 First, analyze what you see on screen and the current situation.
-Then, decide on the best action to take.
+Then, decide on the best action to take. Make sure to format your response according to the JSON schema.
 """
-            }
-        ]
         
         # Create or extend the messages list in the state
         messages = state.get("messages", [])
         
-        # Add the current message to the list
-        current_message = {"role": "user", "content": message_content}
-        messages.append(current_message)
+        # Convert previous messages to LangChain format
+        langchain_messages = self._convert_messages_to_langchain(messages)
+        
+        # Add system message at the beginning if not already present
+        if not langchain_messages or not isinstance(langchain_messages[0], SystemMessage):
+            langchain_messages.insert(0, system_message)
+        
+        # Create appropriate human message with image based on provider
+        if self.provider in ["claude", "openai", "gemini"]:
+            # These providers support images in the messages
+            human_content = []
+            
+            # Add image content
+            if self.provider == "claude":
+                # Claude format
+                human_content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": image_str
+                        }
+                    }
+                )
+            else:
+                # OpenAI and Gemini format
+                human_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{image_str}"
+                        }
+                    }
+                )
+            
+            # Add text content
+            human_content.append(
+                {
+                    "type": "text",
+                    "text": human_message_text
+                }
+            )
+            
+            human_message = HumanMessage(content=human_content)
+        else:
+            # Fallback for providers that don't support images directly
+            # Just use text content (image will be omitted)
+            human_message = HumanMessage(content=f"[Image shown to agent]\n\n{human_message_text}")
+        
+        # Add the current human message to the list
+        langchain_messages.append(human_message)
         
         # Filter messages to prevent context overflow
-        filtered_messages = self.filter_messages(messages)
+        filtered_messages = self._filter_langchain_messages(langchain_messages)
         
         # Log the filtering
-        if len(filtered_messages) < len(messages):
-            self.output.print(f"Filtered messages: {len(messages)} → {len(filtered_messages)}")
+        if len(filtered_messages) < len(langchain_messages):
+            self.output.print(f"Filtered messages: {len(langchain_messages)} → {len(filtered_messages)}")
         
         # Make the API call
-        self.output.print("Calling Claude for action decision...")
-        response = self.client.messages.create(
-            model=self.model,
-            system=system_prompt,
-            messages=filtered_messages,  # Use filtered messages
-            temperature=self.temperature,
-            max_tokens=1000
-        )
+        self.output.print(f"Calling {self.provider.capitalize()} model for action decision...")
+        try:
+            response = self.llm.invoke(filtered_messages)
+            
+            # Extract the decision text
+            decision_text = response.content
+            
+            # Try to parse the structured output
+            try:
+                # Parse the structured output using the JsonOutputParser
+                parsed_action = parser.parse(decision_text)
+                
+                # Add parsed action to state
+                action_info = {
+                    "action": parsed_action["action"].lower(),
+                    "hold_frames": parsed_action["hold_frames"],
+                    "analysis": parsed_action["analysis"]
+                }
+                
+                self.output.print(f"Successfully parsed structured output: {parsed_action['action']} for {parsed_action['hold_frames']} frames")
+                
+                # Format for display
+                formatted_decision = f"## Game State Analysis\n\n{parsed_action['analysis']}\n\n## Best Action\n\n**Action: {parsed_action['action']}**\n\nHold for {parsed_action['hold_frames']} frames"
+                
+                # Log the decision with formatted display
+                self.output.print_section(f"{self.provider.upper()} DECISION", formatted_decision)
+                
+                # Add the AI response to the message history - using the formatted version for clarity
+                ai_message = AIMessage(content=formatted_decision)
+                
+            except Exception as parse_error:
+                # If parsing fails, use the raw response
+                self.output.print(f"Failed to parse structured output: {str(parse_error)}")
+                self.output.print("Using raw response instead")
+                
+                # Log the raw decision
+                self.output.print_section(f"{self.provider.upper()} DECISION", decision_text)
+                
+                # Add the original response to the message history
+                ai_message = AIMessage(content=decision_text)
+                
+                # Set default action info
+                action_info = {
+                    "action": "wait",  # Default to wait
+                    "hold_frames": 10,
+                    "analysis": decision_text
+                }
+                
+                # Try to extract action from text as fallback
+                import re
+                action_match = re.search(r'Action:\s*(\w+)', decision_text, re.IGNORECASE)
+                if action_match:
+                    action = action_match.group(1).lower()
+                    if action in ["up", "down", "left", "right", "a", "b", "start", "select", "wait"]:
+                        action_info["action"] = action
+                        self.output.print(f"Extracted action from text: {action}")
+            
+            # Add the message to the history
+            langchain_messages.append(ai_message)
+            
+            # Convert back to the state format
+            updated_messages = self._convert_langchain_to_state_messages(langchain_messages)
+            
+            # Update the state
+            return {
+                **state,
+                "messages": updated_messages,
+                "decision_text": decision_text,
+                "action_count": state.get("action_count", 0) + 1,
+                "action_info": action_info
+            }
+        except Exception as e:
+            self.output.print_section("ERROR", f"Error calling LLM: {str(e)}")
+            # Return state unchanged on error
+            return {
+                **state,
+                "action_count": state.get("action_count", 0) + 1,
+                "last_error": f"LLM error: {str(e)}",
+                "action_info": {
+                    "action": "wait",  # Default to wait on error
+                    "hold_frames": 10,
+                    "analysis": f"Error occurred: {str(e)}"
+                }
+            }
+    
+    def _convert_messages_to_langchain(self, state_messages: List[Dict[str, Any]]) -> List[Any]:
+        """Convert messages from state format to LangChain format."""
+        langchain_messages = []
         
-        # Add Claude's response to the messages
-        assistant_message = {"role": "assistant", "content": response.content}
-        messages.append(assistant_message)
+        for msg in state_messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                # Handle system messages
+                if isinstance(content, str):
+                    langchain_messages.append(SystemMessage(content=content))
+                else:
+                    # If content is a list or dict, convert to string
+                    langchain_messages.append(SystemMessage(content=str(content)))
+            
+            elif role == "user":
+                # Handle user messages
+                if isinstance(content, str):
+                    langchain_messages.append(HumanMessage(content=content))
+                elif isinstance(content, list):
+                    # Handle content list (may include images)
+                    if self.provider in ["claude", "openai", "gemini"]:
+                        # These providers support structured content with images
+                        langchain_messages.append(HumanMessage(content=content))
+                    else:
+                        # For other providers, extract text only
+                        text_content = ""
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                text_content += item.get("text", "")
+                            elif isinstance(item, str):
+                                text_content += item
+                        langchain_messages.append(HumanMessage(content=text_content))
+            
+            elif role == "assistant":
+                # Handle assistant messages
+                if isinstance(content, str):
+                    langchain_messages.append(AIMessage(content=content))
+                elif isinstance(content, list):
+                    # Handle content list
+                    text_content = ""
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text_content += item.get("text", "")
+                        elif isinstance(item, str):
+                            text_content += item
+                    langchain_messages.append(AIMessage(content=text_content))
         
-        # Extract the decision text
-        decision_text = ""
-        for content in response.content:
-            if content.type == "text":
-                decision_text = content.text
-                break
+        return langchain_messages
+    
+    def _convert_langchain_to_state_messages(self, langchain_messages: List[Any]) -> List[Dict[str, Any]]:
+        """Convert messages from LangChain format to state format."""
+        state_messages = []
         
-        self.output.print_section("CLAUDE'S DECISION", decision_text)
+        for msg in langchain_messages:
+            if isinstance(msg, SystemMessage):
+                state_messages.append({
+                    "role": "system",
+                    "content": msg.content
+                })
+            elif isinstance(msg, HumanMessage):
+                # Handle complex content (like images)
+                if isinstance(msg.content, list):
+                    state_messages.append({
+                        "role": "user",
+                        "content": msg.content
+                    })
+                else:
+                    state_messages.append({
+                        "role": "user",
+                        "content": [{"type": "text", "text": msg.content}]
+                    })
+            elif isinstance(msg, AIMessage):
+                state_messages.append({
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": msg.content}]
+                })
         
-        # Update the state with the original full messages list
-        # (maintaining history but using filtered messages for API calls)
-        return {
-            **state,
-            "messages": messages,
-            "decision_text": decision_text,
-            "action_count": state.get("action_count", 0) + 1
-        }
+        return state_messages
+    
+    def _filter_langchain_messages(self, messages: List[Any]) -> List[Any]:
+        """Filter LangChain messages to keep context window manageable."""
+        # If messages are few, no need to filter
+        if len(messages) <= 5:
+            return messages
+        
+        filtered_messages = []
+        
+        # Keep the first message if it's a system message
+        if messages and isinstance(messages[0], SystemMessage):
+            filtered_messages.append(messages[0])
+        
+        # Add the last N messages
+        keep_last_n = 4  # Keep last 4 message pairs (user+assistant)
+        last_messages = messages[-min(len(messages), keep_last_n*2):]
+        filtered_messages.extend(last_messages)
+        
+        return filtered_messages
     
     def manage_context_node(self, state: GameState) -> GameState:
         """
@@ -463,118 +744,154 @@ Previous summary (if any):
 Summarize the current progress and status.
 """
         
+        # Create LangChain messages for the summarization
+        langchain_messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=message_content)
+        ]
+        
         # Make the API call
-        self.output.print("Calling Claude for summary...")
-        response = self.client.messages.create(
-            model=self.model,
-            system=system_prompt,
-            messages=[{"role": "user", "content": message_content}],
-            temperature=self.temperature,
-            max_tokens=500
-        )
-        
-        # Extract the summary text
-        summary_text = ""
-        for content in response.content:
-            if content.type == "text":
-                summary_text = content.text
-                break
-        
-        self.output.print_section("SUMMARY", summary_text)
-        
-        # Store in knowledge base
-        self.kb.update("player_progress", "last_summary", summary_text)
-        
-        # Get the current messages
-        messages = state.get("messages", [])
-        
-        # If we have a substantial conversation history, perform cleanup
-        if len(messages) > 6:
-            self.output.print_section("CONTEXT CLEANUP", "Pruning old messages to prevent context overflow")
+        self.output.print(f"Calling {self.provider.capitalize()} for summary...")
+        try:
+            response = self.llm.invoke(langchain_messages)
             
-            # Strategy: 
-            # 1. Keep system messages
-            # 2. Remove old message exchanges
-            # 3. Add a summary message
+            # Extract the summary text
+            summary_text = response.content
             
-            # Find messages to remove (keeping the most recent 2 exchanges)
-            messages_to_keep = []
+            self.output.print_section("SUMMARY", summary_text)
             
-            # Keep any system messages at the beginning
-            i = 0
-            while i < len(messages) and messages[i].get("role") == "system":
-                messages_to_keep.append(messages[i])
-                i += 1
+            # Store in knowledge base
+            self.kb.update("player_progress", "last_summary", summary_text)
             
-            # Keep the most recent messages (last 2 exchanges = 4 messages)
-            if len(messages) > i + 4:
-                messages_to_keep.extend(messages[-4:])
-            else:
-                messages_to_keep.extend(messages[i:])
+            # Get the current messages
+            messages = state.get("messages", [])
             
-            # Create a new message array with a system message containing the summary
-            new_messages = [
-                {"role": "system", "content": f"Previous gameplay summary: {summary_text}"}
-            ]
-            new_messages.extend(messages_to_keep)
+            # If we have a substantial conversation history, perform cleanup
+            if len(messages) > 6:
+                self.output.print_section("CONTEXT CLEANUP", "Pruning old messages to prevent context overflow")
+                
+                # Convert to langchain format to process
+                langchain_state_messages = self._convert_messages_to_langchain(messages)
+                
+                # Strategy: 
+                # 1. Keep system messages
+                # 2. Remove old message exchanges
+                # 3. Add a summary message
+                
+                # Find messages to keep
+                messages_to_keep = []
+                
+                # Keep system messages at the beginning
+                i = 0
+                while i < len(langchain_state_messages) and isinstance(langchain_state_messages[i], SystemMessage):
+                    messages_to_keep.append(langchain_state_messages[i])
+                    i += 1
+                
+                # Keep the most recent messages (last 2 exchanges = 4 messages)
+                if len(langchain_state_messages) > i + 4:
+                    messages_to_keep.extend(langchain_state_messages[-4:])
+                else:
+                    messages_to_keep.extend(langchain_state_messages[i:])
+                
+                # Add a system message with the summary
+                new_langchain_messages = [
+                    SystemMessage(content=f"Previous gameplay summary: {summary_text}")
+                ]
+                new_langchain_messages.extend(messages_to_keep)
+                
+                # Convert back to state format
+                new_messages = self._convert_langchain_to_state_messages(new_langchain_messages)
+                
+                self.output.print(f"Reduced context: {len(messages)} messages → {len(new_messages)} messages")
+                
+                # Update the state with the reduced message set
+                return {
+                    **state,
+                    "messages": new_messages,
+                    "last_summary": summary_text,
+                    "summary_due": False,
+                    "context_management_needed": False
+                }
             
-            self.output.print(f"Reduced context: {len(messages)} messages → {len(new_messages)} messages")
-            
-            # Update the state with the reduced message set
+            # If not much history, just update the summary
             return {
                 **state,
-                "messages": new_messages,
                 "last_summary": summary_text,
                 "summary_due": False,
                 "context_management_needed": False
             }
-        
-        # If not much history, just update the summary
-        return {
-            **state,
-            "last_summary": summary_text,
-            "summary_due": False,
-            "context_management_needed": False
-        }
+            
+        except Exception as e:
+            self.output.print_section("ERROR", f"Error generating summary: {str(e)}")
+            # Return original state with error
+            return {
+                **state,
+                "last_error": f"Summary generation error: {str(e)}",
+                "summary_due": False,
+                "context_management_needed": False
+            }
     
     def execute_action_node(self, state: GameState) -> GameState:
         """Execute the action decided by the agent."""
         self.output.print_section("EXECUTING ACTION")
         
-        decision_text = state.get("decision_text", "")
+        # Get action info from the parsed structured output if available
+        action_info = state.get("action_info", {})
         
-        # Simple action extraction - in production, this should be more robust with more NLP
-        action = None
-        hold_frames = 10  # Default
+        if action_info:
+            # Use the structured parsed action
+            action = action_info.get("action", "wait").lower()
+            hold_frames = action_info.get("hold_frames", 10)
+            self.output.print(f"Using structured action: {action} for {hold_frames} frames")
+        else:
+            # Fallback to text parsing if no structured output is available
+            decision_text = state.get("decision_text", "")
+            self.output.print("No structured action found, falling back to text parsing")
+            
+            # Simple action extraction from text
+            action = None
+            hold_frames = 10  # Default
+            
+            # Look for button keywords in the decision
+            for btn in ["up", "down", "left", "right", "a", "b", "start", "select", "wait"]:
+                if btn in decision_text.lower():
+                    action = btn
+                    
+                    # Try to extract hold_frames if specified
+                    import re
+                    hold_patterns = [
+                        r'hold.*?(\d+).*?frames',
+                        r'press.*?(\d+).*?frames',
+                        r'for.*?(\d+).*?frames'
+                    ]
+                    
+                    for pattern in hold_patterns:
+                        match = re.search(pattern, decision_text.lower())
+                        if match:
+                            try:
+                                hold_frames = int(match.group(1))
+                                break
+                            except ValueError:
+                                pass
+                    
+                    break
+            
+            # Default to wait if no action found
+            if not action:
+                action = "wait"
+                self.output.print("No clear action found in decision, defaulting to wait")
         
-        # Look for button keywords in the decision
-        for btn in ["up", "down", "left", "right", "a", "b", "start", "select", "wait"]:
-            if btn in decision_text.lower():
-                action = btn
-                
-                # Try to extract hold_frames if specified
-                import re
-                hold_patterns = [
-                    r'hold.*?(\d+).*?frames',
-                    r'press.*?(\d+).*?frames',
-                    r'for.*?(\d+).*?frames'
-                ]
-                
-                for pattern in hold_patterns:
-                    match = re.search(pattern, decision_text.lower())
-                    if match:
-                        try:
-                            hold_frames = int(match.group(1))
-                            break
-                        except ValueError:
-                            pass
-                
-                break
-        
-        # Default to wait if no action found
-        if not action:
+        # Validate the action is one of the allowed buttons
+        valid_buttons = ["up", "down", "left", "right", "a", "b", "start", "select", "wait"]
+        if action not in valid_buttons:
+            self.output.print(f"Invalid action '{action}', defaulting to wait")
             action = "wait"
-            self.output.print("No clear action found in decision, defaulting to wait")
+        
+        # Validate hold_frames is within reasonable range
+        if not isinstance(hold_frames, int) or hold_frames < 1:
+            hold_frames = 10
+        elif hold_frames > 30:
+            hold_frames = 30
         
         # Execute the action
         result = ""
@@ -585,7 +902,7 @@ Summarize the current progress and status.
                 result = self.emulator.wait_frames(hold_frames)
                 self.kb.add_action("wait", f"Waited for {hold_frames} frames")
             else:
-                # Use async_press_button from GameEmulatorAdapter
+                # Use press_button from GameEmulatorAdapter
                 result = self.emulator.press_button(action, hold_frames)
                 self.kb.add_action(action, f"Pressed {action} for {hold_frames} frames")
         except Exception as e:
@@ -630,7 +947,11 @@ Summarize the current progress and status.
         return state
     
     async def run_agent_loop(self):
-        """Run the agent decision loop asynchronously."""
+        """
+        Run the agent decision loop asynchronously.
+        Modified to ensure we don't trigger recursion limits by
+        having the agent execute only one full decision cycle per loop iteration.
+        """
         # Initialize state
         initial_state = {
             "screen_base64": "",
@@ -644,21 +965,36 @@ Summarize the current progress and status.
             "last_summary": ""
         }
         
+        # Track the current state
+        current_state = initial_state
+        
+        # Main agent loop
         while self.running and not self.paused:
             try:
-                # Stream the graph execution
+                # Run one complete graph execution (non-streaming)
+                # This ensures we don't trigger recursion by running just one agent cycle per loop iteration
                 config = {"configurable": {"thread_id": self.thread_id}}
                 
-                async for chunk in self.graph.astream(
-                    initial_state, 
-                    config, 
-                    stream_mode="updates"
-                ):
-                    # Process updates if needed (for debugging/logging)
-                    for node, update in chunk.items():
-                        self.output.print(f"Node {node} completed")
+                self.output.print("Starting new agent decision cycle")
                 
-                # Wait a bit after each agent cycle to allow emulator to run
+                # Use invoke instead of astream to run one complete cycle
+                try:
+                    # Execute the graph once with the current state
+                    final_state = await self.graph.ainvoke(current_state, config)
+                    
+                    # Update the current state for the next cycle
+                    current_state = final_state
+                    
+                    # Log completion of the cycle
+                    self.output.print(f"Completed agent cycle {current_state.get('action_count', 0)}")
+                    
+                except Exception as e:
+                    self.output.print_section("GRAPH ERROR", f"Error executing graph: {str(e)}")
+                    # If there's an error, wait longer before retrying
+                    await asyncio.sleep(2)
+                
+                # Wait between agent cycles to allow the game to process and render
+                # This is important to prevent the agent from making decisions too quickly
                 await asyncio.sleep(0.5)
                 
             except Exception as e:
@@ -669,7 +1005,7 @@ Summarize the current progress and status.
         """Start the agent asynchronously."""
         self.output.print_section(
             "STARTING POKÉMON AGENT", 
-            f"Model: {self.model}, Temperature: {self.temperature}"
+            f"Model: {self.model_name}, Temperature: {self.temperature}"
         )
         
         # Set flags

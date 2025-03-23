@@ -1,156 +1,106 @@
 # Pokémon LLM Agent
 
-A Python framework for building AI agents that can play Pokémon Red/Blue using Large Language Models (LLMs).
+An AI agent that plays Pokémon Red/Blue using LLMs (Claude, GPT-4, Gemini, or local models via Ollama) with asynchronous API calls through direct APIs or LangChain.
 
-## Overview
+## Features
 
-This project enables LLM-powered agents to play Pokémon by:
-
-1. Running the game through a Game Boy emulator (PyBoy)
-2. Capturing the game screen and state at regular intervals
-3. Sending this information to an LLM (Claude) via API calls
-4. Having the LLM decide on the best action to take
-5. Executing the chosen action in the game
-
-The framework provides a flexible base for experimenting with different LLM implementations, including direct Anthropic API calls and LangChain-based approaches.
-
-## Key Features
-
-- **Game Interface**: Provides access to game screen, memory, and controls
-- **LLM Agent Base Class**: Abstract base class for implementing different LLM agents
-- **Multiple Implementations**: 
-  - Anthropic API-based agent using raw API calls
-  - LangChain-based agent for more complex workflows
-  - LangGraph-based agent for stateful, multi-step reasoning
-- **Experimentation Framework**: Run experiments, collect metrics, and visualize agent performance
-- **Memory Mapping**: Predefined memory addresses for accessing critical game state information
-
-## Requirements
-
-- Python 3.8+
-- PyBoy (Game Boy emulator with Python API)
-- Anthropic API key for Claude
-- Pokémon Red/Blue ROM file (must be legally obtained)
-- Additional libraries: langchain, PIL, numpy, matplotlib (for visualization)
+- Support for multiple LLM providers:
+  - Claude (Anthropic)
+  - GPT-4/4o (OpenAI)
+  - Gemini (Google)
+  - Local models via Ollama
+- Option to use LangChain as a unified framework
+- Fully asynchronous processing (the game continues running during API calls)
+- Automatic memory management and summarization
+- Complete game state tracking
+- Detailed action statistics
+- Game state saving/loading
 
 ## Installation
 
 1. Clone this repository
 2. Install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. You will need a Pokémon Red/Blue ROM (not included)
+
+## API Keys
+
+Set up your API keys as environment variables:
 
 ```bash
-pip install pyboy langchain langchain_anthropic langgraph anthropic numpy matplotlib pillow
+export ANTHROPIC_API_KEY="your_anthropic_key_here"
+export OPENAI_API_KEY="your_openai_key_here"
+export GOOGLE_API_KEY="your_google_key_here"
 ```
 
-3. Set up your API key:
-
-```bash
-export ANTHROPIC_API_KEY=your_api_key_here
-```
+Alternatively, you can provide them as command-line arguments.
 
 ## Usage
 
-### Basic Usage
-
-Run the agent using the direct Anthropic API:
+Basic usage with Claude:
 
 ```bash
-python pokemon_main.py path/to/pokemon_red.gb --agent anthropic --steps 100
+python pokemon_agent_multi.py path/to/pokemon_red.gb
 ```
 
-Run the agent using LangChain:
+Using LangChain with OpenAI:
 
 ```bash
-python pokemon_main.py path/to/pokemon_red.gb --agent langchain --steps 100
+python pokemon_agent_multi.py path/to/pokemon_red.gb --provider openai --use-langchain
 ```
 
-Run the agent using LangGraph:
+Using local models with Ollama:
 
 ```bash
-python pokemon_main.py path/to/pokemon_red.gb --agent langgraph --steps 100
+python pokemon_agent_multi.py path/to/pokemon_red.gb --provider ollama --api-base "http://localhost:11434"
 ```
 
-### Advanced Options
+## Command-Line Options
 
-```bash
-python pokemon_main.py path/to/pokemon_red.gb \
-  --agent anthropic \
-  --model claude-3-sonnet-20240229 \
-  --headless \
-  --speed 2 \
-  --steps 500 \
-  --observation-interval 20 \
-  --mode experiment
-```
+- `--provider`: LLM provider to use (claude, openai, gemini, ollama)
+- `--api-key`: API key (will use env var if not provided)
+- `--model`: Specific model name
+- `--headless`: Run without display
+- `--steps`: Number of steps to run
+- `--temperature`: Temperature setting (0.0-1.0)
+- `--speed`: Game speed multiplier
+- `--no-sound`: Disable game sound
+- `--log-to-file`: Save output to file
+- `--log-file`: Path to log file
+- `--summary-interval`: Turns between summaries
+- `--api-base`: API base URL (for Ollama)
+- `--use-langchain`: Use LangChain framework
 
-### Running Experiments
+## Architecture
 
-To run a full experiment with metrics collection and visualization:
+The agent uses an asynchronous architecture:
 
-```bash
-python pokemon_trainer.py path/to/pokemon_red.gb --agent anthropic --steps 200
-```
+1. The game runs continuously
+2. LLM API calls happen in the background
+3. When an API response is received, the action is executed
 
-This will:
-1. Create an experiment directory
-2. Run the agent for the specified number of steps
-3. Collect metrics like response time and game progress
-4. Save screenshots at each step
-5. Generate performance plots
-6. Create a timelapse GIF of gameplay
+This ensures smooth gameplay even when API calls take time.
 
-## Project Structure
+## Memory Management
 
-- `pokemon_llm_agent_base.py`: Core classes for game interaction and agent base
-- `pokemon_anthropic_agent.py`: Anthropic API implementation
-- `pokemon_langchain_agent.py`: LangChain implementation
-- `pokemon_langgraph_agent.py`: LangGraph implementation with multi-step reasoning
-- `pokemon_trainer.py`: Framework for running experiments and collecting metrics
-- `pokemon_main.py`: Command-line interface for running agents
+The agent manages its memory through:
 
-## Game State Information
+1. Maintaining a limited conversation history
+2. Periodic summarization to condense game progress
+3. Knowledge base tracking for long-term memory
 
-The agents can access detailed game state information, including:
+## LangChain Integration
 
-- Player position and map ID
-- Pokémon party information (count, HP, levels)
-- Battle status (active, enemy Pokémon)
-- UI state (text boxes, menus)
-- Progress indicators (badges, money)
+The LangChain integration provides:
 
-## Extending the Framework
+1. A unified interface for all models
+2. Compatibility with the existing architecture
+3. Access to LangChain's tools and capabilities
 
-### Creating a New Agent Implementation
-
-You can create new agent implementations by subclassing `PokemonLLMAgentBase` and implementing the required methods:
-
-```python
-class MyCustomAgent(PokemonLLMAgentBase):
-    def __init__(self, game_interface, ...):
-        super().__init__(game_interface)
-        # Your initialization code
-    
-    def get_llm_response(self, prompt, screen_base64):
-        # Your LLM implementation
-        pass
-    
-    def run(self, num_steps=None):
-        # Your run implementation
-        pass
-```
-
-### Adding Custom Memory Mappings
-
-To add more memory addresses for game state tracking:
-
-```python
-# Add to MEMORY_MAP in PokemonGameInterface
-self.MEMORY_MAP.update({
-    'my_custom_address': 0xD123,
-    'another_address': 0xC456,
-})
-```
+To enable LangChain, add the `--use-langchain` flag.
 
 ## License
 
-MIT License
+MIT License - See LICENSE file for details.
