@@ -84,6 +84,9 @@ async def main():
         logger.info("Creating Pokemon agent")
         agent = PokemonAgent(
             rom_path=args.rom_path,
+            emulator=emulator,  # Pass the emulator directly
+            knowledge_base=knowledge_base,  # Pass the knowledge base
+            tools_adapter=tools_adapter,  # Pass the tools adapter
             model_name=args.model,
             api_key=api_key,
             temperature=args.temperature,
@@ -132,8 +135,8 @@ async def main():
         if 'agent' in locals():
             agent.stop()
         
-        # Close the emulator if it was created
-        elif 'emulator' in locals():
+        # The agent no longer owns the emulator, so we need to close it here
+        if 'emulator' in locals():
             emulator.close()
         
         logger.info("Agent stopped. Goodbye!")

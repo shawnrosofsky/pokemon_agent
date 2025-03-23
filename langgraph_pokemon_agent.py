@@ -24,9 +24,9 @@ from langgraph.graph import MessagesState
 from langchain_core.messages import RemoveMessage, SystemMessage
 
 # Import our modules
-from pokemon_emulator import GameEmulator
-from pokemon_knowledge import KnowledgeBase
-from pokemon_tools import PokemonTools
+from langgraph_emulator_adapter import GameEmulatorAdapter
+from langgraph_knowledge_base import KnowledgeBase
+from langgraph_tools_adapter import PokemonToolsAdapter
 
 
 class GameState(TypedDict):
@@ -89,7 +89,10 @@ class PokemonAgent:
     
     def __init__(
         self, 
-        rom_path: str, 
+        rom_path: str,
+        emulator: GameEmulatorAdapter,  # Using the emulator passed from main
+        knowledge_base: KnowledgeBase,  # Using the knowledge base passed from main
+        tools_adapter: PokemonToolsAdapter,  # Using the tools adapter passed from main
         model_name: str = "claude-3-7-sonnet-20250219", 
         api_key: Optional[str] = None, 
         temperature: float = 0.7, 
@@ -110,11 +113,11 @@ class PokemonAgent:
         # Setup output manager
         self.output = OutputManager(output_to_file=output_to_file, log_file=log_file)
         
-        # Setup components
+        # Use passed components instead of creating new ones
         self.rom_path = rom_path
-        self.emulator = GameEmulator(rom_path, headless=headless, speed=speed, sound=sound)
-        self.kb = KnowledgeBase()
-        self.tools_manager = PokemonTools(self.emulator, self.kb)
+        self.emulator = emulator
+        self.kb = knowledge_base
+        self.tools_manager = tools_adapter
         
         # Agent settings
         self.model = model_name
@@ -582,6 +585,7 @@ Summarize the current progress and status.
                 result = self.emulator.wait_frames(hold_frames)
                 self.kb.add_action("wait", f"Waited for {hold_frames} frames")
             else:
+                # Use async_press_button from GameEmulatorAdapter
                 result = self.emulator.press_button(action, hold_frames)
                 self.kb.add_action(action, f"Pressed {action} for {hold_frames} frames")
         except Exception as e:
@@ -625,24 +629,6 @@ Summarize the current progress and status.
         # Return updated state
         return state
     
-    async def run_game_loop(self):
-        """Run the main game loop asynchronously."""
-        last_frame_time = time.time()
-        
-        while self.running and not self.paused:
-            # Calculate time since last frame
-            now = time.time()
-            elapsed = now - last_frame_time
-            
-            # If it's time for a new frame
-            if elapsed >= self.frame_time:
-                # Run the frame
-                self.emulator.pyboy.tick()
-                last_frame_time = now
-            
-            # Small sleep to avoid CPU hogging
-            await asyncio.sleep(0.001)
-    
     async def run_agent_loop(self):
         """Run the agent decision loop asynchronously."""
         # Initialize state
@@ -680,31 +666,26 @@ Summarize the current progress and status.
                 await asyncio.sleep(1)  # Avoid rapid error loops
     
     async def start(self):
-        """Start the game and agent asynchronously."""
+        """Start the agent asynchronously."""
         self.output.print_section(
             "STARTING POKÉMON AGENT", 
             f"Model: {self.model}, Temperature: {self.temperature}"
         )
         
-        # Start the emulator
-        self.emulator.start_game(skip_intro=True)
-        
         # Set flags
         self.running = True
         self.paused = False
         
-        # Start game and agent loops
-        game_loop_task = asyncio.create_task(self.run_game_loop())
+        # Run only the agent loop (game loop is managed by main.py)
         agent_loop_task = asyncio.create_task(self.run_agent_loop())
         
-        # Wait for both loops
-        await asyncio.gather(game_loop_task, agent_loop_task)
+        # Wait for the agent loop to complete
+        await agent_loop_task
     
     def stop(self):
         """Stop the agent."""
         self.running = False
         self.emulator.save_state("final.state")
-        self.emulator.close()
         
         # Final stats
         self.output.print_section("FINAL STATISTICS")
@@ -733,24 +714,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Create agent
-    agent = PokemonAgent(
-        rom_path=args.rom_path,
-        model_name=args.model,
-        api_key=args.api_key,
-        temperature=args.temperature,
-        headless=args.headless,
-        speed=args.speed,
-        sound=not args.no_sound,
-        output_to_file=args.log_to_file,
-        log_file=args.log_file,
-        summary_interval=args.summary_interval
-    )
-    
-    try:
-        # Run event loop
-        asyncio.run(agent.start())
-    except KeyboardInterrupt:
-        print("\nInterrupted by user. Stopping...")
-    finally:
-        agent.stop()
+    print("Please use langgraph_main.py instead of running this file directly.")
+    print("Direct execution is no longer supported due to component dependencies.")
