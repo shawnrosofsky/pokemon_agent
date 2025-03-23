@@ -25,9 +25,6 @@ from langgraph.graph import MessagesState
 from langchain_core.messages import RemoveMessage, SystemMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-# Langchain output parsing
-from langchain.output_parsers.structured import StructuredOutputParser
-from langchain.output_parsers.json import JsonOutputParser
 
 # Langchain model integrations
 from langchain_core.language_models.chat_models import BaseChatModel
